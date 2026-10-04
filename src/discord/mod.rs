@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod responses;
 pub mod verification;
+pub mod viewer;
 use crate::{error::Error, storage::LocalStorage};
 use axum::{
     Json, Router,
@@ -16,7 +17,7 @@ use axum::{
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -28,6 +29,31 @@ const JOB_BUDGET: Duration = Duration::from_secs(55);
 // Six minutes also covers the inclusive boundary/whole-second UTC timestamp precision.
 const REPLAY_LIFETIME: Duration = Duration::from_secs(360);
 const DENIED: &str = "This interaction is not available. Check access and command configuration.";
+enum Job {
+    Command(commands::Command),
+    Navigation(viewer::Navigation),
+}
+impl Job {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Command(c) => c.name,
+            Self::Navigation(_) => "viewer-navigation",
+        }
+    }
+}
+// Only active messages are retained, bounded by the four admitted jobs. RAII also
+// releases on dropped acknowledgements, panics, cancellation, and error notices.
+struct MessageGuard {
+    messages: Arc<Mutex<HashSet<u64>>>,
+    id: u64,
+}
+impl Drop for MessageGuard {
+    fn drop(&mut self) {
+        if let Ok(mut messages) = self.messages.lock() {
+            messages.remove(&self.id);
+        }
+    }
+}
 pub struct Replay {
     entries: HashMap<u64, Instant>,
     capacity: usize,
@@ -71,6 +97,7 @@ pub struct Runtime {
     replay: Mutex<Replay>,
     tasks: TaskTracker,
     cancellation: CancellationToken,
+    messages: Arc<Mutex<HashSet<u64>>>,
 }
 impl Runtime {
     pub fn new(
@@ -92,6 +119,7 @@ impl Runtime {
             replay: Mutex::new(Replay::new(4096)),
             tasks: TaskTracker::new(),
             cancellation: CancellationToken::new(),
+            messages: Arc::new(Mutex::new(HashSet::new())),
         })
     }
     /// Close admission, drain for ten seconds, then cancel outstanding jobs and their child tasks.
@@ -115,11 +143,12 @@ impl Runtime {
     }
     fn dispatch(
         self: &Arc<Self>,
-        command: commands::Command,
+        command: Job,
         id: u64,
         token: String,
         cap: u64,
         permit: tokio::sync::OwnedSemaphorePermit,
+        guard: Option<MessageGuard>,
     ) {
         if self.admission.is_closed() {
             return;
@@ -127,20 +156,16 @@ impl Runtime {
         let runtime = self.clone();
         self.tasks.spawn(async move {
             let _permit = permit;
+            let _guard = guard;
             runtime.supervise(command, id, token, cap).await;
         });
     }
-    async fn supervise(
-        self: Arc<Self>,
-        command: commands::Command,
-        id: u64,
-        token: String,
-        cap: u64,
-    ) {
+    async fn supervise(self: Arc<Self>, command: Job, id: u64, token: String, cap: u64) {
         if self.cancellation.is_cancelled() {
             return;
         }
-        let name = command.name;
+        let name = command.name();
+        let navigation = matches!(&command, Job::Navigation(_));
         let error_token = token.clone();
         let worker = self.clone();
         let mut task = tokio::spawn(async move { worker.deliver(command, id, token, cap).await });
@@ -174,24 +199,72 @@ impl Runtime {
         }
         if !delivered && !cancelled {
             // No file on the error edit: never retry an ambiguous attachment delivery.
-            let payload = responses::message(
-                "Delivery could not be completed. Please rerun this read-only command.",
-            );
-            let _ = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.client
-                    .edit(self.config.application, &error_token, &payload, None),
-            )
+            let text = if navigation {
+                "The viewer update could not be confirmed. Its existing image and controls were not deliberately replaced with an error. Delivery may have completed; check the shared message or reopen /images before trying again."
+            } else {
+                "Delivery could not be completed. Please rerun this read-only command."
+            };
+            let payload = responses::message(text);
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                if navigation {
+                    self.client
+                        .followup(self.config.application, &error_token, text)
+                        .await
+                } else {
+                    self.client
+                        .edit(self.config.application, &error_token, &payload, None)
+                        .await
+                }
+            })
             .await;
         }
     }
     async fn deliver(
         &self,
-        command: commands::Command,
+        command: Job,
         id: u64,
         token: String,
         cap: u64,
     ) -> Result<(), client::Failure> {
+        if let Job::Navigation(navigation) = command {
+            let prepared = tokio::time::timeout(
+                Duration::from_secs(35),
+                responses::navigate(&self.pool, &self.storage, &self.origin, &navigation, cap),
+            )
+            .await;
+            return match prepared {
+                Ok(Ok(reply)) => {
+                    self.client
+                        .edit(
+                            self.config.application,
+                            &token,
+                            &reply.payload,
+                            reply.attachment.as_ref(),
+                        )
+                        .await
+                }
+                result => {
+                    let notice = match result {
+                        Ok(Err(Error::Validation(_))) | Ok(Err(Error::Missing)) => {
+                            "This artwork view is stale: the character or current image was removed or unlinked. Reopen /images with an existing character. The shared viewer was kept."
+                        }
+                        _ => {
+                            tracing::warn!(
+                                interaction_id = id,
+                                "viewer preparation failed or timed out"
+                            );
+                            "The Archive could not prepare this update. The shared viewer was kept; try again later or reopen /images."
+                        }
+                    };
+                    self.client
+                        .followup(self.config.application, &token, notice)
+                        .await
+                }
+            };
+        }
+        let Job::Command(command) = command else {
+            return Err(client::Failure::Configuration);
+        };
         // Leave time after domain/file preparation for delivery and a error edit.
         let result = tokio::time::timeout(
             Duration::from_secs(35),
@@ -290,23 +363,31 @@ async fn interactions(
     if payload.get("type").and_then(Value::as_u64) == Some(1) {
         return Json(json!({"type":1})).into_response();
     }
-    if payload.get("type").and_then(Value::as_u64) != Some(2)
+    let kind = payload.get("type").and_then(Value::as_u64);
+    if !matches!(kind, Some(2 | 3))
         || snowflake(payload.get("guild_id")) != Some(runtime.config.guild)
         || !snowflake(payload.pointer("/member/user/id"))
             .is_some_and(|id| runtime.config.users.contains(&id))
     {
         return Json(responses::immediate(DENIED)).into_response();
     }
+    let command = match kind {
+        Some(2) => match commands::parse(&payload["data"]) {
+            Ok(c) => Job::Command(c),
+            Err(e) => return Json(responses::immediate(e)).into_response(),
+        },
+        Some(3) => match viewer::parse(&payload, runtime.config.application) {
+            Some(navigation) => Job::Navigation(navigation),
+            None => return Json(responses::immediate(DENIED)).into_response(),
+        },
+        _ => return Json(responses::immediate(DENIED)).into_response(),
+    };
     if runtime.maintenance {
         return Json(responses::immediate(
             "The Archive is paused for maintenance. Please rerun the command later.",
         ))
         .into_response();
     }
-    let command = match commands::parse(&payload["data"]) {
-        Ok(c) => c,
-        Err(e) => return Json(responses::immediate(e)).into_response(),
-    };
     let Some(id) = snowflake(payload.get("id")) else {
         return Json(responses::immediate(DENIED)).into_response();
     };
@@ -334,6 +415,22 @@ async fn interactions(
             .into_response();
         }
     };
+    let guard = if let Job::Navigation(navigation) = &command {
+        let acquired = runtime
+            .messages
+            .lock()
+            .map(|mut messages| messages.len() < 4 && messages.insert(navigation.message))
+            .unwrap_or(false);
+        if !acquired {
+            return Json(responses::immediate("This viewer is already being updated. Check the shared message and try again shortly.")).into_response();
+        }
+        Some(MessageGuard {
+            messages: runtime.messages.clone(),
+            id: navigation.message,
+        })
+    } else {
+        None
+    };
     let replay = runtime
         .replay
         .lock()
@@ -344,13 +441,16 @@ async fn interactions(
     }
     // Begin only after the response body has yielded the deferred acknowledgement.
     // This avoids spawning domain work while the handler is still constructing its reply.
+    let acknowledgement = if matches!(&command, Job::Navigation(_)) {
+        br#"{"type":6}"#.as_slice()
+    } else {
+        br#"{"type":5,"data":{"allowed_mentions":{"parse":[]}}}"#.as_slice()
+    };
     let body = axum::body::Body::from_stream(Acknowledgement {
-        bytes: Some(Bytes::from_static(
-            br#"{"type":5,"data":{"allowed_mentions":{"parse":[]}}}"#,
-        )),
+        bytes: Some(Bytes::from_static(acknowledgement)),
         start: Some(Box::new({
             let token = token.to_owned();
-            move || runtime.dispatch(command, id, token, cap, permit)
+            move || runtime.dispatch(command, id, token, cap, permit, guard)
         })),
     });
     (

@@ -140,3 +140,74 @@ pub async fn random_image(pool: &PgPool, character: i64) -> Result<Option<Image>
     crate::app::id(character)?;
     Ok(sqlx::query_as(&format!("SELECT {IMAGE_COLUMNS} FROM images i JOIN people p ON p.id=i.uploaded_by_person_id JOIN image_characters ic ON ic.image_id=i.id WHERE ic.character_id=$1 ORDER BY random() LIMIT 1")).bind(character).fetch_optional(pool).await?)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Previous,
+    Next,
+}
+pub struct ArtworkView {
+    pub character: Detail,
+    pub image: Option<Image>,
+    pub total: i64,
+    pub position: i64,
+    pub previous: bool,
+    pub next: bool,
+}
+fn stale_view() -> Error {
+    Error::Validation(vec![("viewer".into(), "This artwork view is stale: the character or current image was removed or unlinked. Reopen /images with an existing character.".into())])
+}
+/// One read-only snapshot per move; no snapshot is promised across successive clicks.
+/// Cursor membership is verified before choosing a neighbour, including at either end.
+pub async fn artwork_view(
+    pool: &PgPool,
+    character: i64,
+    cursor: Option<(i64, Direction)>,
+) -> Result<ArtworkView, Error> {
+    crate::app::id(character)?;
+    if let Some((id, _)) = cursor {
+        crate::app::id(id)?;
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let detail: Detail = sqlx::query_as("SELECT c.id,c.name,f.name AS franchise,c.description FROM characters c JOIN franchises f ON f.id=c.franchise_id WHERE c.id=$1")
+        .bind(character).fetch_optional(&mut *tx).await?.ok_or_else(stale_view)?;
+    let image: Option<Image> = if let Some((id, direction)) = cursor {
+        let current: Image = sqlx::query_as(&format!("SELECT {IMAGE_COLUMNS} FROM images i JOIN people p ON p.id=i.uploaded_by_person_id JOIN image_characters ic ON ic.image_id=i.id WHERE ic.character_id=$1 AND i.id=$2"))
+            .bind(character).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(stale_view)?;
+        let (comparison, order) = match direction {
+            Direction::Previous => (">", "ASC"),
+            Direction::Next => ("<", "DESC"),
+        };
+        // Only these fixed operators/orderings are interpolated; all inputs are bound.
+        let neighbour: Option<Image> = sqlx::query_as(&format!("SELECT {IMAGE_COLUMNS} FROM images i JOIN people p ON p.id=i.uploaded_by_person_id JOIN image_characters ic ON ic.image_id=i.id WHERE ic.character_id=$1 AND (i.created_at,i.id) {comparison} ($2,$3) ORDER BY i.created_at {order},i.id {order} LIMIT 1"))
+            .bind(character).bind(current.created_at).bind(current.id).fetch_optional(&mut *tx).await?;
+        Some(neighbour.unwrap_or(current))
+    } else {
+        sqlx::query_as(&format!("SELECT {IMAGE_COLUMNS} FROM images i JOIN people p ON p.id=i.uploaded_by_person_id JOIN image_characters ic ON ic.image_id=i.id WHERE ic.character_id=$1 ORDER BY i.created_at DESC,i.id DESC LIMIT 1"))
+            .bind(character).fetch_optional(&mut *tx).await?
+    };
+    let total: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM image_characters WHERE character_id=$1")
+            .bind(character)
+            .fetch_one(&mut *tx)
+            .await?;
+    let position = if let Some(image) = &image {
+        let newer: i64 = sqlx::query_scalar("SELECT count(*) FROM image_characters ic JOIN images i ON i.id=ic.image_id WHERE ic.character_id=$1 AND (i.created_at,i.id)>($2,$3)")
+            .bind(character).bind(image.created_at).bind(image.id).fetch_one(&mut *tx).await?;
+        newer.checked_add(1).ok_or(Error::TooLarge)?
+    } else {
+        0
+    };
+    tx.commit().await?;
+    Ok(ArtworkView {
+        character: detail,
+        image,
+        total,
+        position,
+        previous: position > 1,
+        next: position > 0 && position < total,
+    })
+}

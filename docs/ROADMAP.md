@@ -46,8 +46,8 @@ Use Discord HTTP interactions in the existing Axum process. No Gateway connectio
 
 | Command | Behavior |
 | --- | --- |
-| `/character character:Link [franchise:Zelda]` | Identity, franchise, bounded description, associations, protected website detail link |
-| `/images character:Link [franchise:Zelda] [page:1]` | Five newest-first image entries, protected detail/gallery links, and at most one attachment preview |
+| `/character character:Link [franchise:Zelda]` | Identity, franchise, bounded description, associations, protected detail link, one random associated artwork with artist/detail attribution |
+| `/images character:Link [franchise:Zelda]` | One newest-first image with shared Previous/Next buttons editing the same public message, protected detail/gallery links, and one attachment when deliverable |
 | `/random-image character:Link [franchise:Zelda]` | Random archived image associated with the exact character, one attachment when within delivery limits, metadata/detail link |
 | `/characters [person:Jasper] [association:kin] [franchise:Zelda] [page:1]` | Paginated character list with relational AND filtering and same-row person/type matching |
 
@@ -63,10 +63,16 @@ Owner acceptance still required: both allowlisted owners accurately retrieve rec
 
 Implementation brief: [LIBRARIAN_M1_PROMPT.md](LIBRARIAN_M1_PROMPT.md).
 
+### Clerk improvement: character artwork and interactive image viewer — implemented locally
+
+Owner reports the Discord integration is live. `/character` now adds one random associated image; `/images` replaces five-entry pages with one newest-first image and Previous/Next buttons updating the same public message. Either allowlisted owner can navigate. Signed type-3 clicks defer with type 6 and use their fresh token; membership-checked keyset navigation needs no persistent viewer session. Missing/oversized entries retain metadata and controls; stale/preparation errors preserve the viewer with private notices. HTTP interactions, safe attachment copies, private denials, and protected website links remain. No Gateway, migration, new variables/scopes, or infrastructure is introduced.
+
+Hosted viewer acceptance remains owner-unverified. After deploying, the owner must rerun explicit guild registration to remove `/images page`, then test both owners, unlisted denials, shared navigation/fallback/stale cases and a redeploy using [DISCORD.md](DISCORD.md#operator-update-for-this-milestone). Bulk uploads remain a separate completed Archive feature. Brief: [DISCORD_VIEWER_PROMPT.md](DISCORD_VIEWER_PROMPT.md).
+
 ### Clerk follow-ups, after retrieval works
 
 - Explicit message-context **Apps → Archive Image** action, reusing existing validation/duplicate/persistence logic. Design attachment fetching limits, source provenance, attribution and confirmation first. No passive attachment harvesting.
-- Autocomplete and navigation components if exact commands become cumbersome.
+- Autocomplete or additional navigation controls if concrete use warrants them; artwork Previous/Next is now implemented.
 - Better browsing and thumbnails as separate, evidence-driven Archive improvements.
 
 ## Later: Librarian as Searcher — exploratory semantic retrieval

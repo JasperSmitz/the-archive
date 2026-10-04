@@ -2,7 +2,7 @@
 
 A private, locally runnable character catalog and artwork archive. M1 supports people, franchises, characters, tags, and extensible association types. M2 adds shared artwork stored on local disk, with metadata and character memberships in PostgreSQL. M3 protects the archive with provisioned accounts and PostgreSQL-backed sessions, and prepares a single-instance container deployment. Catalog operations, single-image upload, and editing use server-rendered HTML and ordinary forms without JavaScript. Optional bulk uploading uses a small browser script with no frontend build pipeline.
 
-Product direction and milestone sequencing: [The Archive / The Librarian roadmap](docs/ROADMAP.md). Librarian Clerk M1 adds optional deterministic, read-only Discord retrieval: [setup and command guide](docs/DISCORD.md), [implementation brief](docs/LIBRARIAN_M1_PROMPT.md). Clerk uses SQL, not an AI model; later roadmap capabilities remain plans. Real Discord setup/registration/hosted acceptance are owner steps.
+Product direction and milestone sequencing: [The Archive / The Librarian roadmap](docs/ROADMAP.md). Librarian Clerk adds optional deterministic, read-only Discord retrieval and a shared artwork viewer: [setup and command guide](docs/DISCORD.md), [original implementation brief](docs/LIBRARIAN_M1_PROMPT.md), [viewer brief](docs/DISCORD_VIEWER_PROMPT.md). Clerk uses SQL, not an AI model; later roadmap capabilities remain plans. Real Discord setup/registration/hosted acceptance are owner steps.
 
 ## Prerequisites and startup
 
@@ -37,7 +37,7 @@ cargo run --locked -- discord commands print
 cargo run --locked -- discord commands register
 ```
 
-Printing is offline; registration does not initialize DB/storage and only upserts those four guild commands. No token is needed by the running server. Removing a website account does not revoke Discord access; edit the allowlist/redeploy or disable the integration. Ephemeral attachments copy artwork to Discord; recipients can retain/forward copies. Restarts can interrupt deferred retrieval; rerun the command. No domain migration or model service is added. Protocol handlers live in `src/discord`; reusable bounded exact queries live in `src/app/retrieval`.
+Printing is offline; registration does not initialize DB/storage and only upserts those four guild commands. No token is needed by the running server. Removing a website account does not revoke Discord access; edit the allowlist/redeploy or disable the integration. Public retrieval replies and attachments copy artwork into the channel; channel viewers can retain/forward copies. `/character` includes one random associated artwork; `/images` opens a shared newest-first viewer navigable by either allowlisted owner. Buttons update the same message using each click’s fresh token, with private denials/errors and no stored viewer session. After deploying this change, rerun explicit guild registration to remove `/images page`; `/characters page` stays unchanged. See the [operator update](docs/DISCORD.md#operator-update-for-this-milestone). Restarts can interrupt deferred retrieval; rerun the command. No domain migration or model service is added. Protocol handlers live in `src/discord`; reusable bounded exact queries live in `src/app/retrieval`.
 
 ## Tests and checks
 

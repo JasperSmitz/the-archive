@@ -69,8 +69,31 @@ impl Client {
             "{}/webhooks/{application}/{token}/messages/@original",
             self.base
         );
+        self.deliver(&url, payload, attachment, false).await
+    }
+    /// A component failure notifies only its invoker; it never edits the shared viewer.
+    pub async fn followup(&self, application: u64, token: &str, text: &str) -> Result<(), Failure> {
+        if application == 0 || !config::token(token) {
+            return Err(Failure::Configuration);
+        }
+        let mut payload = super::responses::message(text);
+        payload["flags"] = serde_json::json!(64);
+        let url = format!("{}/webhooks/{application}/{token}", self.base);
+        self.deliver(&url, &payload, None, true).await
+    }
+    async fn deliver(
+        &self,
+        url: &str,
+        payload: &Value,
+        attachment: Option<&Attachment>,
+        followup: bool,
+    ) -> Result<(), Failure> {
         for attempt in 0..2 {
-            let request = self.http.patch(&url);
+            let request = if followup {
+                self.http.post(url)
+            } else {
+                self.http.patch(url)
+            };
             let request = if let Some(a) = attachment {
                 let file = Part::bytes(a.bytes.clone())
                     .file_name(a.filename.clone())

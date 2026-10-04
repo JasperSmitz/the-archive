@@ -603,24 +603,17 @@ async fn exact_queries_same_row_pagination_and_read_only(pool: PgPool) {
             .len(),
         10
     );
-    let page_two = commands::parse(
-        &command(
-            "images",
-            json!([
-                option("character", &format!("#{}", f.link)),
-                json!({"name":"page","type":4,"value":2})
-            ]),
-        )["data"],
-    )
-    .unwrap();
-    let page_two = responses::execute(&pool, &storage, ORIGIN, &page_two, 100000)
-        .await
-        .unwrap();
     assert!(
-        second
-            .iter()
-            .any(|i| page_two.attachment.as_ref().unwrap().filename
-                == format!("archive-image-{}.png", i.id))
+        commands::parse(
+            &command(
+                "images",
+                json!([
+                    option("character", "Link"),
+                    json!({"name":"page","type":4,"value":2})
+                ])
+            )["data"]
+        )
+        .is_err()
     );
     let cmd = commands::parse(&command("characters", json!([option("person", "missing")]))["data"])
         .unwrap();
@@ -750,10 +743,13 @@ async fn delivery(fake: &mut Fake) -> Delivery {
         .unwrap()
 }
 async fn decode(d: Delivery) -> (Value, Option<(String, String, Vec<u8>)>) {
+    decode_at(d, "test-only-interaction-token").await
+}
+async fn decode_at(d: Delivery, token: &str) -> (Value, Option<(String, String, Vec<u8>)>) {
     assert_eq!(d.method, axum::http::Method::PATCH);
     assert_eq!(
         d.path,
-        "/api/v10/webhooks/111/test-only-interaction-token/messages/@original"
+        format!("/api/v10/webhooks/111/{token}/messages/@original")
     );
     let content_type = d.headers["content-type"].to_str().unwrap();
     if content_type.starts_with("application/json") {
@@ -824,14 +820,16 @@ async fn signed_full_retrieval_and_attachment_workflow(pool: PgPool) {
         let (result, file) = decode(delivery(&mut fake).await).await;
         payload_bounds(&result);
         assert_eq!(result["allowed_mentions"]["parse"], json!([]));
-        if *name == "images" || *name == "random-image" {
+        if *name == "images" || *name == "random-image" || *name == "character" {
             let (filename, mime, bytes) = file.unwrap();
             assert_eq!(mime, "image/png");
             assert_eq!(bytes, png(33));
             assert_eq!(filename, format!("archive-image-{id}.png"));
             assert_eq!(result["attachments"][0]["id"], 0);
             let desc = result["embeds"][0]["description"].as_str().unwrap();
-            assert!(desc.contains(&format!("/images?character={}", f.venti)));
+            if *name != "character" {
+                assert!(desc.contains(&format!("/images?character={}", f.venti)));
+            }
             assert!(!desc.contains("&page="));
             assert!(desc.contains(&format!("preview: image #{id} only")));
         } else {
@@ -954,8 +952,28 @@ async fn attachment_actual_bounds_page_fallback_and_payload_limits(pool: PgPool)
     let r = responses::execute(&pool, &storage, ORIGIN, &cmd, 100000)
         .await
         .unwrap();
-    assert!(r.attachment.unwrap().filename.contains(&good.to_string()));
-    assert!(r.payload["embeds"][0]["fields"].as_array().unwrap().len() == 2);
+    assert!(r.attachment.is_none());
+    assert!(
+        r.payload["embeds"][0]["fields"][0]["name"]
+            .as_str()
+            .unwrap()
+            .contains(&missing.id.to_string())
+    );
+    assert_eq!(
+        r.payload["embeds"][0]["fields"].as_array().unwrap().len(),
+        3
+    );
+    assert!(
+        r.payload["embeds"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Stored file is missing")
+    );
+    assert!(
+        !r.payload["components"][0]["components"][1]["disabled"]
+            .as_bool()
+            .unwrap()
+    );
     // Replace the generated file with a larger regular file: byte_size alone must not suffice.
     tokio::fs::write(root.path().join(&good_image.storage_key), vec![7; 1001])
         .await
@@ -1251,3 +1269,6 @@ async fn shutdown_cancels_blocked_jobs_and_closes_admission(pool: PgPool) {
     );
     lock.rollback().await.unwrap();
 }
+
+#[path = "support/discord_viewer.rs"]
+mod viewer_tests;

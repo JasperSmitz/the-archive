@@ -1,4 +1,4 @@
-use super::{client::Attachment, commands::Command};
+use super::{client::Attachment, commands::Command, viewer};
 use crate::{
     app::retrieval::{self, Resolution},
     error::Error,
@@ -58,7 +58,7 @@ pub fn plain(s: &str, max: usize) -> String {
     bounded
 }
 pub fn message(text: &str) -> Value {
-    json!({"content":truncate(text,1800),"allowed_mentions":{"parse":[]},"embeds":[],"attachments":[]})
+    json!({"content":truncate(text,1800),"allowed_mentions":{"parse":[]},"embeds":[],"attachments":[],"components":[]})
 }
 pub fn immediate(text: &str) -> Value {
     let mut data = message(text);
@@ -68,7 +68,7 @@ pub fn immediate(text: &str) -> Value {
 fn reply(title: &str, description: &str, fields: Vec<Value>) -> Reply {
     // At most ten fields: 10*(64+420)+900+128 = 5,868, under the 6,000 embed total.
     Reply {
-        payload: json!({"content":"The Librarian · Archive retrieval","allowed_mentions":{"parse":[]},"attachments":[],"embeds":[{"title":plain(title,128),"description":truncate(description,900),"fields":fields.into_iter().take(10).collect::<Vec<_>>()}]}),
+        payload: json!({"content":"The Librarian · Archive retrieval","allowed_mentions":{"parse":[]},"attachments":[],"components":[],"embeds":[{"title":plain(title,128),"description":truncate(description,900),"fields":fields.into_iter().take(10).collect::<Vec<_>>()}]}),
         attachment: None,
     }
 }
@@ -231,100 +231,156 @@ pub async fn execute(
             ),
             field("Person / association", association_text),
         ];
-        return Ok(reply(&character.name, &description, fields));
-    }
-    let (images, more, total) = if command.name == "random-image" {
-        (
-            retrieval::random_image(pool, character.id)
-                .await?
-                .into_iter()
-                .collect::<Vec<_>>(),
-            false,
-            None,
-        )
-    } else {
-        let (images, more) = retrieval::images(pool, character.id, command.page).await?;
-        (
-            images,
-            more,
-            Some(retrieval::image_count(pool, character.id).await?),
-        )
-    };
-    let fields = images
-        .iter()
-        .map(|i| {
-            field_link(
-                &format!("Image #{}", i.id),
-                &format!(
-                    "{}\nArtist: {} · {}×{}",
-                    plain(&i.original_filename, 55),
-                    plain(i.artist.as_deref().unwrap_or("Not recorded"), 40),
-                    i.width,
-                    i.height,
-                ),
-                link(origin, &format!("/images/{}", i.id)),
-            )
-        })
-        .collect();
-    let mut description = format!(
-        "{} — {}\nCharacter gallery: {}\n",
-        plain(&character.name, 60),
-        plain(&character.franchise, 60),
-        link(origin, &format!("/images?character={}", character.id))
-    );
-    if images.is_empty() {
-        description.push_str("No archived images on this page.");
-    } else if let Some(total) = total {
-        description.push_str(&format!(
-            "Page {} · {total} archived images. ",
-            command.page
-        ));
-        if more && command.page < retrieval::MAX_PAGE {
-            description.push_str(&format!(
-                "Rerun with the same selector and page:{} for more. ",
-                command.page + 1
-            ));
-        }
-    } else {
-        description
-            .push_str("One random image from this character's complete archived memberships. ");
-    }
-    let cap = cap.min(FILE_CAP);
-    let mut attachment = None;
-    let mut reasons = std::collections::BTreeSet::new();
-    for image in &images {
-        match preview(storage, image, cap).await {
-            Ok(a) => {
-                description.push_str(&format!("\nAttached preview: image #{} only.", image.id));
-                attachment = Some(a);
-                break;
-            }
-            Err(reason) => {
-                reasons.insert(reason);
-            }
-        }
-    }
-    if !images.is_empty() && attachment.is_none() {
-        description.push_str(&format!(
-            "\nNo preview delivered: {}. Use the protected detail links.",
-            reasons.into_iter().collect::<Vec<_>>().join("; ")
-        ));
-    }
-    let mut result = reply(
-        if command.name == "random-image" {
-            "Random artwork"
+        let mut result = reply(&character.name, &description, fields);
+        if let Some(image) = retrieval::random_image(pool, character.id).await? {
+            result.payload["embeds"][0]["fields"]
+                .as_array_mut()
+                .ok_or(Error::Missing)?
+                .extend(image_fields(origin, &image));
+            attach(storage, &mut result, &image, cap).await;
         } else {
-            "Artwork"
-        },
-        &description,
-        fields,
+            result.payload["embeds"][0]["fields"]
+                .as_array_mut()
+                .ok_or(Error::Missing)?
+                .push(field("Artwork", "No associated artwork yet.".into()));
+        }
+        return Ok(result);
+    }
+    if command.name == "images" {
+        return artwork_reply(
+            storage,
+            origin,
+            retrieval::artwork_view(pool, character.id, None).await?,
+            cap,
+        )
+        .await;
+    }
+    let image = retrieval::random_image(pool, character.id).await?;
+    let mut result = reply(
+        "Random artwork",
+        &format!(
+            "{} — {}\nCharacter gallery: {}\n{}",
+            plain(&character.name, 60),
+            plain(&character.franchise, 60),
+            link(origin, &format!("/images?character={}", character.id)),
+            if image.is_some() {
+                "One random image from this character's complete archived memberships."
+            } else {
+                "No archived images on this page."
+            }
+        ),
+        image
+            .as_ref()
+            .map(|image| image_fields(origin, image))
+            .unwrap_or_default(),
     );
-    if let Some(a) = attachment {
-        result.payload["attachments"] = json!([{"id":0,"filename":a.filename,"description":"Original archived artwork selected by The Librarian"}]);
-        result.payload["embeds"][0]["image"] = json!({"url":format!("attachment://{}",a.filename)});
-        result.attachment = Some(a);
+    if let Some(image) = image {
+        attach(storage, &mut result, &image, cap).await;
     }
     Ok(result)
+}
+fn image_fields(origin: &str, image: &Image) -> Vec<Value> {
+    // Keep attribution/dimensions separate from long protected URLs, so neither
+    // disappears merely because a configured hostname approaches its bound.
+    vec![
+        field(
+            &format!("Image #{}", image.id),
+            format!(
+                "{}\nArtist: {} · {}×{}",
+                plain(&image.original_filename, 55),
+                plain(image.artist.as_deref().unwrap_or("Not recorded"), 40),
+                image.width,
+                image.height
+            ),
+        ),
+        field_link(
+            "Image detail",
+            "Website login required",
+            link(origin, &format!("/images/{}", image.id)),
+        ),
+    ]
+}
+async fn attach(storage: &LocalStorage, reply: &mut Reply, image: &Image, cap: u64) {
+    let notice = match preview(storage, image, cap).await {
+        Ok(a) => {
+            reply.payload["attachments"] = json!([{"id":0,"filename":a.filename,"description":"Original archived artwork selected by The Librarian"}]);
+            reply.payload["embeds"][0]["image"] =
+                json!({"url":format!("attachment://{}",a.filename)});
+            reply.attachment = Some(a);
+            format!("\nAttached preview: image #{} only.", image.id)
+        }
+        Err(reason) => format!(
+            "\nNo preview delivered: {reason}. Selected image #{} retained; use its protected detail link.",
+            image.id
+        ),
+    };
+    let text = reply.payload["embeds"][0]["description"]
+        .as_str()
+        .unwrap_or("");
+    reply.payload["embeds"][0]["description"] = json!(format!(
+        "{}{notice}",
+        truncate(text, 900usize.saturating_sub(notice.encode_utf16().count()))
+    ));
+}
+async fn artwork_reply(
+    storage: &LocalStorage,
+    origin: &str,
+    view: retrieval::ArtworkView,
+    cap: u64,
+) -> Result<Reply, Error> {
+    let position = if view.image.is_some() {
+        format!(
+            "Image {} of {} · newest first. {}{}Counts can change as the Archive is edited.",
+            view.position,
+            view.total,
+            if !view.previous { "Newest end. " } else { "" },
+            if !view.next { "Oldest end. " } else { "" }
+        )
+    } else {
+        "No archived images for this character.".into()
+    };
+    let mut result = reply(
+        "Artwork viewer",
+        &format!(
+            "{} — {} · #{}\nCharacter gallery: {}\n{position}",
+            plain(&view.character.name, 60),
+            plain(&view.character.franchise, 60),
+            view.character.id,
+            link(origin, &format!("/images?character={}", view.character.id))
+        ),
+        view.image
+            .as_ref()
+            .map(|image| image_fields(origin, image))
+            .unwrap_or_default()
+            .into_iter()
+            .chain(std::iter::once(field_link(
+                "Character record",
+                "Full curated record",
+                link(origin, &format!("/characters/{}", view.character.id)),
+            )))
+            .collect(),
+    );
+    if let Some(image) = view.image {
+        result.payload["components"] =
+            viewer::controls(view.character.id, image.id, view.previous, view.next);
+        attach(storage, &mut result, &image, cap).await;
+    }
+    Ok(result)
+}
+pub async fn navigate(
+    pool: &PgPool,
+    storage: &LocalStorage,
+    origin: &str,
+    navigation: &viewer::Navigation,
+    cap: u64,
+) -> Result<Reply, Error> {
+    let view = retrieval::artwork_view(
+        pool,
+        navigation.character,
+        Some((navigation.image, navigation.direction)),
+    )
+    .await?;
+    artwork_reply(storage, origin, view, cap).await
 }
 /// Both metadata and the actual read are bounded; never read a replaced file unboundedly.
 pub async fn preview(

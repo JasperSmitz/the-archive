@@ -61,13 +61,9 @@ pub fn manifest() -> Vec<Spec> {
         },
         Spec {
             name: "images",
-            description: "Browse a character's artwork, five per page",
+            description: "View a character's newest artwork with shared Previous/Next buttons",
             kind: 1,
-            options: vec![
-                string("character", true),
-                string("franchise", false),
-                page(),
-            ],
+            options: vec![string("character", true), string("franchise", false)],
         },
         Spec {
             name: "random-image",
