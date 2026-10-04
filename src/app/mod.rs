@@ -1,4 +1,5 @@
 pub mod associations;
+pub mod auth;
 pub mod catalog;
 pub mod characters;
 pub mod images;

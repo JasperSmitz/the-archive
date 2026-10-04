@@ -44,6 +44,13 @@ pub(super) fn error_message(e: Error) -> (StatusCode, String) {
                 .collect::<Vec<_>>()
                 .join(" "),
         ),
+        Error::AuthInternal => {
+            tracing::error!("authentication cryptographic operation failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Authentication is temporarily unavailable.".into(),
+            )
+        }
         Error::TooLarge => (
             StatusCode::PAYLOAD_TOO_LARGE,
             "Image files must be at most 20 MiB (request limit: 20 MiB + 64 KiB).".into(),

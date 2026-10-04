@@ -27,4 +27,8 @@ rustc-ice-*.txt
 .env.*
 !.env.example
 
-/var/images/
+/var/
+
+/backups/
+*.dump
+*.backup

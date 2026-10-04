@@ -281,7 +281,19 @@ async fn collect(
     file.ok_or_else(|| invalid("file", "Select an image file."))
 }
 fn multipart_error(e: axum::extract::multipart::MultipartError) -> Error {
-    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+    // Layered body wrappers can nest Axum errors. Walk typed sources rather than
+    // depending on MultipartError recognizing only one wrapping layer.
+    use std::error::Error as _;
+    let mut source = e.source();
+    let mut limited = false;
+    while let Some(error) = source {
+        if error.is::<http_body_util::LengthLimitError>() {
+            limited = true;
+            break;
+        }
+        source = error.source();
+    }
+    if limited || e.status() == StatusCode::PAYLOAD_TOO_LARGE {
         Error::TooLarge
     } else {
         invalid(

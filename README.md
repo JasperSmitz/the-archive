@@ -1,24 +1,29 @@
 # The Archive
 
-A private, locally runnable character catalog and artwork archive. M1 supports people, franchises, characters, tags, and extensible association types. M2 adds shared artwork stored on local disk, with metadata and character memberships in PostgreSQL. All operations use server-rendered HTML and ordinary forms; JavaScript is unnecessary.
+A private, locally runnable character catalog and artwork archive. M1 supports people, franchises, characters, tags, and extensible association types. M2 adds shared artwork stored on local disk, with metadata and character memberships in PostgreSQL. M3 protects the archive with provisioned accounts and PostgreSQL-backed sessions, and prepares a single-instance container deployment. All operations use server-rendered HTML and ordinary forms; JavaScript is unnecessary.
 
 ## Prerequisites and startup
 
-Install stable Rust (validated with Rust 1.96.0), Docker with the Compose plugin, and optionally `psql` for database inspection. The database uses PostgreSQL 17; the application runs on the host.
+Install stable Rust (validated with Rust 1.96.0), Docker with the Compose plugin, and PostgreSQL 17 client tools (`pg_dump`, `pg_restore`, `psql`) for recovery tests and backups. The database uses PostgreSQL 17; the application runs on the host.
 
 ```sh
 cp .env.example .env
 docker compose up -d --wait
+# Hidden prompts ask for a password and confirmation. No accounts are seeded.
+cargo run --locked -- account create owner-one
+cargo run --locked -- account create owner-two
 cargo run --locked
 ```
 
-Open <http://127.0.0.1:3000>. Create franchises and people, then characters. Character pages let you add multiple person/type associations and tags. Create extra tags or association types from the navigation. Association keys are immutable; labels can be edited. Character filters combine with AND, and person/type filters match the same association row. Results are alphabetically ordered with stable tie breakers.
+Open <http://127.0.0.1:3000> and sign in. Accounts are independent of catalog people; create people separately for associations and manual uploader attribution. Create franchises and people, then characters. Character pages let you add multiple person/type associations and tags. Create extra tags or association types from the navigation. Association keys are immutable; labels can be edited. Character filters combine with AND, and person/type filters match the same association row. Results are alphabetically ordered with stable tie breakers.
 
 `IMAGE_STORAGE_DIR` defaults to `./var/images`, relative to the working directory. Set it to an absolute path if starting from different directories. Startup creates and canonicalizes it and probes file creation, syncing, publication, and removal; an unusable directory fails startup rather than choosing a fallback. Files use generated UUID names, and this directory is ignored by Git. Keep it writable by the application and do not let other users modify its contents. The storage filesystem must support hard links within that directory.
 
-`DATABASE_URL` is required. `LISTEN_ADDR` defaults to `127.0.0.1:3000`; `APP_ORIGIN` defaults to the HTTP origin of that listener. Set both if using another address. `RUST_LOG` controls logs. `.env` is loaded without overriding exported environment variables. Startup connects to PostgreSQL and applies all pending ordered migrations before listening; connection or migration failure exits with an error. Migrations seed only the five standard association types. Compilation does not need PostgreSQL, and migration edits trigger recompilation.
+`APP_ENV` must explicitly be `development` or `production`; `.env.example` selects development. `DATABASE_URL` is required. `LISTEN_ADDR` defaults to `127.0.0.1:3000`; `APP_ORIGIN` defaults to the HTTP origin of that listener. Set both if using another address. `RUST_LOG` controls logs. `.env` is loaded without overriding exported environment variables. Startup connects to PostgreSQL and applies all pending ordered migrations before listening; connection or migration failure exits with an error. Migrations seed only the five standard association types. Compilation does not need PostgreSQL, and migration edits trigger recompilation.
 
 Stop the application with Ctrl-C (or SIGTERM). `docker compose stop` stops PostgreSQL without deleting its named volume. Restart with `docker compose up -d --wait` and `cargo run --locked`; catalog data persists. `docker compose down` also preserves the volume. **Do not use `down -v` unless you intend to erase all data.**
+
+For a complete manual M1–M3 walkthrough, see [testing.md](testing.md).
 
 ## Tests and checks
 
@@ -31,24 +36,21 @@ cargo clippy --all-targets --all-features -- -D warnings
 DATABASE_URL=postgres://archive:archive_local@127.0.0.1:5432/postgres cargo test
 ```
 
-Tests cover M1 behavior plus image constraints, all three formats, complete decoding and rejection of corrupt/animated inputs, injectable size/dimension/pixel/allocation policies, filename/path handling, metadata validation and escaping, uncategorized/shared images, duplicate races, transaction failure cleanup, deletion and missing files, gallery pagination, orphan maintenance, and a PostgreSQL-backed multipart HTTP workflow. Image tests generate tiny fixtures locally and use isolated temporary directories, never the configured development image archive. If PostgreSQL is unavailable, integration tests fail rather than silently skip.
+Tests provision real accounts and obtain cookies through the login route; authentication is never disabled in tests. Recovery tests invoke the installed PostgreSQL client tools (set `PG_BIN=/path/to/bin` if they are outside PATH). Tests cover accounts, password resets/disabling, session digests/expiry/revocation/restart persistence, cookies, protected routes, safe returns, rate limiting, maintenance mode, configuration, CLI administration, and a real M2 dump/restore followed by M3 migration/bootstrap. They also cover M1 behavior plus image constraints, all three formats, complete decoding and rejection of corrupt/animated inputs, injectable size/dimension/pixel/allocation policies, filename/path handling, metadata validation and escaping, uncategorized/shared images, duplicate races, transaction failure cleanup, deletion and missing files, gallery pagination, orphan maintenance, and a PostgreSQL-backed multipart HTTP workflow. Image tests generate tiny fixtures locally and use isolated temporary directories, never the configured development image archive. If PostgreSQL is unavailable, integration tests fail rather than silently skip.
 
 ## Boundaries and request protection
 
-This is a local-only application with **no authentication**. Anyone who can access the listener can read and change its data. Both the default application listener and Compose's database port bind to loopback. Do not expose either to a public network.
+Private catalog pages, galleries, originals, and mutations require a provisioned login. There is no public registration or password-reset email. Only `/login`, `/static/app.css`, and `/healthz` are public. Unauthenticated page reads redirect to login; original-image reads and mutations return 401. Sign out uses POST. Authenticated HTML and authentication responses use `private, no-store`; images retain private caching and vary by Cookie. Health is a process-liveness check returning only `ok`: startup connects and migrates before listening, but health does not continually probe PostgreSQL.
 
-Unsafe requests must have an `Origin` header matching `APP_ORIGIN`. If Origin is absent, a Referer URL with the matching origin is accepted. A missing, malformed, `null`, or mismatched header is rejected with 403; an invalid Origin never falls back to Referer. Ordinary browsers send these headers for forms. Privacy configurations that strip both will prevent form submissions. Scripts must explicitly send a matching header, for example:
+The default listener and Compose database port bind to loopback. Production requires HTTPS `APP_ORIGIN`, an explicit storage directory, and a PostgreSQL URL explicitly requiring TLS. Cookie security is derived from `APP_ENV`, never forwarded headers: HttpOnly, SameSite=Lax, Path=/, and Secure in production, with no Domain. Follow [deployment.md](deployment.md) before exposing the application. This remains a small, single-instance private application rather than a multi-tenant service.
 
-```sh
-curl -i -H 'Origin: http://127.0.0.1:3000' \
-  -d 'name=Zelda' http://127.0.0.1:3000/franchises
-```
+Unsafe requests must have an `Origin` header matching `APP_ORIGIN`. If Origin is absent, a Referer URL with the matching origin is accepted. A missing, malformed, `null`, or mismatched header is rejected with 403; an invalid Origin never falls back to Referer. Ordinary browsers send these headers for forms. Privacy configurations that strip both will prevent form submissions. Scripts must send a matching header **and a valid session cookie** for protected operations. Login is also subject to this check. Post-login return paths are limited to validated local catalog/image paths; external URLs and encoded path bypasses are rejected.
 
 GET reads and POST mutates. Successful mutations redirect with 303. Validation returns 422, missing records 404, duplicate entities and restricted deletions 409, and unexpected failures 500 with details confined to server logs. Character and tag deletion cascades memberships; people, franchises, and association types in use cannot be deleted. A person attributed as an image uploader is also protected from deletion. Deleting a character retains its images and removes only its image memberships. Deleting an image retains its characters. Deletion requires an explicit confirmation page.
 
 ## Structure
 
-One Rust package contains library and binary targets. `config` and `main` handle startup; `app` contains ordinary-input application functions and validation; `models` and `error` define data and typed failures. `web` handles forms, routes, and Askama rendering. SQLx runtime queries use explicit columns and bound values; dynamic table names come only from the internal catalog kind enum. PostgreSQL owns uniqueness, foreign keys, lengths, timestamps, and deletion rules. `templates`, `static`, and `migrations` contain HTML, CSS, and schema respectively. Dedicated image models live in `models/images`, application operations and validation in `app/images`, concrete local file operations in `storage`, and image handlers/templates in `web/images` and `templates/images`. There is no parallel JSON API, frontend build, authentication, or cloud infrastructure.
+One Rust package contains library and binary targets. `config` and `main` handle startup; `app` contains ordinary-input application functions and validation; `models` and `error` define data and typed failures. `web` handles forms, routes, and Askama rendering. SQLx runtime queries use explicit columns and bound values; dynamic table names come only from the internal catalog kind enum. PostgreSQL owns uniqueness, foreign keys, lengths, timestamps, and deletion rules. `templates`, `static`, and `migrations` contain HTML, CSS, and schema respectively. Dedicated image models live in `models/images`, application operations and validation in `app/images`, concrete local file operations in `storage`, and image handlers/templates in `web/images` and `templates/images`. Authentication application functions live in `app/auth`, HTTP/cookie/session protection in `web/auth`, and account CLI parsing/password input in `cli`. There is no parallel JSON API, frontend build, generic infrastructure framework, or cloud-storage integration.
 
 
 ## Using the image archive
@@ -93,17 +95,31 @@ cargo run --locked -- cleanup-orphans --apply
 
 Maintenance compares files against database storage keys. It considers only regular files with generated `<32 lowercase hex digits>.jpg/png/webp` names or `.upload-<32 hex digits>.tmp` names. It never recurses, never follows symlinks, and ignores unrelated files. A fixed **24-hour grace period** excludes recent and future-dated temporary/orphan files. **Only run destructive cleanup while uploads are stopped**: grace is a safeguard, not coordination with live transactions. Use the correct database/storage pair; another database cannot identify your archive's referenced files.
 
-## Backups and recovery
-
-Back up **PostgreSQL and the image directory together**, with the application stopped so they represent the same archive state. For the default local setup:
+## Accounts and sessions
 
 ```sh
-# Stop the Rust application with Ctrl-C. Leave PostgreSQL running.
-mkdir -p backups
-docker compose exec -T db pg_dump -U archive -d archive -Fc > backups/archive.dump
-tar -czf backups/images.tar.gz -C var images
+cargo run --locked -- migrate
+cargo run --locked -- account create owner-one
+cargo run --locked -- account list
+cargo run --locked -- account reset-password owner-one
+cargo run --locked -- account disable owner-one
+cargo run --locked -- sessions cleanup
 ```
 
-For a custom storage path, archive that configured directory instead. To restore, stop the application, restore the matching database dump with `pg_restore`, and restore its matching image directory before starting again. Keep backups outside the storage directory, and do not commit personal backups. A database-only backup cannot recover image bytes; a file-only backup cannot recover metadata and memberships.
+Database-only commands require only `DATABASE_URL`, load `.env` without replacing exports, apply pending migrations, and never initialize image storage. Creation/reset uses hidden, confirmed prompts. For automation, `account create USER --password-stdin` and `account reset-password USER --password-stdin` read one UTF-8 password line (optional LF/CRLF) followed by EOF, with a bounded read; pipe directly from a password manager or use a private temporary input file. Never put passwords in arguments, exported variables, or shared shell history. A reset leaves a disabled account disabled.
 
-M2 remains local-only and unauthenticated. People are domain subjects, not accounts. There are no cloud services, source downloads, image edits/crops, perceptual hashes, image tags, representative portraits, background queues, or frontend build pipeline.
+Usernames are trimmed, lowercase ASCII, 3–64 characters: letters/digits plus dot, underscore, hyphen, starting with a letter/digit. Passwords are 12–1,024 UTF-8 **bytes**, without NUL; spaces are preserved and there are no composition rules. Interactive/stdin input is one line. Argon2id v19 uses 19,456 KiB, two iterations, one lane, a random 16-byte salt and 32-byte output. Password work runs on blocking threads with at most two concurrent operations.
+
+Each login creates a new OS-random 32-byte opaque token encoded as 64 lowercase hex characters. Only its SHA-256 digest is persisted. Sessions expire absolutely after seven days and survive restarts. Logout revokes the current session; password reset/disable revokes all account sessions transactionally. Expired or disabled sessions cannot authenticate even before cleanup. Successful logins delete up to 100 expired rows; `sessions cleanup` deletes another bounded batch per invocation. No signing secret is needed.
+
+A global in-process rolling limiter admits 20 login submissions per minute, shared across users. Its fixed-capacity queue does not use caller-supplied IP/forwarding headers. It resets on restart, and one user can temporarily exhaust it for everyone; this is intentional for a two-person, single-instance archive. It is not distributed abuse protection.
+
+## Backups, recovery, and deployment
+
+Back up PostgreSQL **and** the image directory together while all application writers are stopped. `MAINTENANCE_MODE=true` returns 503 for all routes except health/CSS, including login/logout; changing it requires a restart. Do not run account/migration/cleanup commands concurrently with a coordinated snapshot. The database must remain running. Use [scripts/backup.sh](scripts/backup.sh) and [scripts/restore.sh](scripts/restore.sh); restoration refuses a populated database or nonempty image destination. Dumps include sensitive private data, password hashes and session digests. Keep them encrypted/private and outside Git and the live archive.
+
+[deployment.md](deployment.md) contains exact local and Railway account, backup, isolated restore, and M2 import instructions, provider steps, volume ownership handling, and outstanding verification. A restored M2 dump retains its applied migration history; migrate only **after** restoring into the empty destination. Code rollback never reverses database migrations.
+
+The multi-stage [Dockerfile](Dockerfile) builds locked release code, includes TLS certificates and PostgreSQL recovery tools, and defaults to UID 10001. Railway volume initialization can start the entrypoint as root using `RAILWAY_RUN_UID=0`; it fixes only `/data/images`, then drops privileges before launching the application. No deployment was performed as part of M3. Docker/Compose/container and provider-specific behavior must be checked by the owner where those tools/services are available.
+
+People remain domain subjects, not accounts. There are no cloud storage services, source downloads, image edits/crops, perceptual hashes, image tags, representative portraits, background queues, or frontend build pipeline. Galleries still serve originals; thumbnail work and deployment-tier decoder memory measurement remain open in [technical-debt.md](technical-debt.md).

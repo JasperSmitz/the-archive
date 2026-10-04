@@ -1,3 +1,4 @@
+mod common;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -21,7 +22,6 @@ use the_archive::{
     error::Error,
     models::Kind,
     storage::{LocalStorage, ORPHAN_GRACE},
-    web,
 };
 use tower::ServiceExt;
 fn fixture(format: &str, color: u8) -> Vec<u8> {
@@ -575,7 +575,7 @@ fn multipart(fields: &[(&str, String)], files: &[(&str, &str, Vec<u8>)]) -> Vec<
     b
 }
 async fn send(
-    r: &axum::Router,
+    r: &common::Client,
     method: &str,
     path: &str,
     content_type: &str,
@@ -609,7 +609,7 @@ async fn send(
 async fn multipart_http_workflow(pool: PgPool) {
     let (d, s) = storage().await;
     let (p, a, b) = setup(&pool).await;
-    let r = web::router(pool.clone(), "http://127.0.0.1:3000".into(), s.clone());
+    let r = common::client(&pool, s.clone()).await;
     let mime = "multipart/form-data; boundary=boundary";
     let fields = vec![
         ("uploader", p.to_string()),
@@ -815,4 +815,117 @@ async fn multipart_http_workflow(pool: PgPool) {
     );
     assert!(catalog::get(&pool, Kind::Characters, a).await.is_ok());
     assert!(catalog::get(&pool, Kind::Characters, b).await.is_ok());
+}
+
+/// A body with an unknown size hint, emitted in chunks. Repeated bytes keep fixtures small.
+struct Chunked {
+    segments: std::collections::VecDeque<(Vec<u8>, usize)>,
+    offset: usize,
+}
+impl futures_core::Stream for Chunked {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        loop {
+            let Some((pattern, total)) = self.segments.front() else {
+                return std::task::Poll::Ready(None);
+            };
+            if self.offset == *total {
+                self.segments.pop_front();
+                self.offset = 0;
+                continue;
+            }
+            let n = (*total - self.offset).min(16 * 1024);
+            let bytes = if pattern.len() == 1 {
+                vec![pattern[0]; n]
+            } else {
+                pattern[self.offset..self.offset + n].to_vec()
+            };
+            self.offset += n;
+            return std::task::Poll::Ready(Some(Ok(bytes.into())));
+        }
+    }
+}
+fn streamed(segments: Vec<(Vec<u8>, usize)>) -> Body {
+    Body::from_stream(Chunked {
+        segments: segments.into(),
+        offset: 0,
+    })
+}
+fn segment(bytes: &[u8]) -> (Vec<u8>, usize) {
+    (bytes.to_vec(), bytes.len())
+}
+#[sqlx::test(migrations = "./migrations")]
+async fn streamed_multipart_limits_without_content_length(pool: PgPool) {
+    let (d, s) = storage().await;
+    let (p, _, _) = setup(&pool).await;
+    let r = common::client(&pool, s).await;
+    let header = format!(
+        "--boundary\r\nContent-Disposition: form-data; name=\"uploader\"\r\n\r\n{p}\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n\r\n"
+    );
+    let another=b"\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"b.png\"\r\n\r\n";
+    let footer = b"\r\n--boundary--\r\n";
+    // Each file is below the individual cap, but the multi-chunk request crosses the total cap.
+    let cases = vec![
+        vec![
+            segment(header.as_bytes()),
+            (vec![b'x'], 20 * 1024 * 1024 - 64 * 1024),
+            segment(another),
+            (vec![b'y'], 256 * 1024),
+            segment(footer),
+        ],
+        // A single file exceeds 20 MiB while its complete request remains within the allowance.
+        vec![
+            segment(header.as_bytes()),
+            (vec![b'x'], 20 * 1024 * 1024 + 1),
+            segment(footer),
+        ],
+    ];
+    for segments in cases {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/images")
+            .header("origin", "http://127.0.0.1:3000")
+            .header("content-type", "multipart/form-data; boundary=boundary")
+            .body(streamed(segments))
+            .unwrap();
+        assert!(!req.headers().contains_key("content-length"));
+        let response = r.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM images")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(entries(&d).is_empty());
+    }
+    let data = fixture("png", 77);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/images")
+        .header("origin", "http://127.0.0.1:3000")
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(streamed(vec![
+            segment(header.as_bytes()),
+            segment(&data),
+            segment(footer),
+        ]))
+        .unwrap();
+    assert!(!req.headers().contains_key("content-length"));
+    assert_eq!(
+        r.oneshot(req).await.unwrap().status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM images")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(entries(&d).len(), 1);
 }

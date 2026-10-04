@@ -1,3 +1,4 @@
+mod common;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -12,7 +13,6 @@ use the_archive::{
     },
     error::Error,
     models::{Filters, Kind},
-    web,
 };
 use tower::ServiceExt;
 async fn add(p: &PgPool, k: Kind, name: &str, franchise_id: Option<i64>) -> i64 {
@@ -307,7 +307,7 @@ async fn database_rules(pool: PgPool) {
     }
 }
 async fn request(
-    r: &axum::Router,
+    r: &common::Client,
     method: &str,
     path: &str,
     body: &str,
@@ -348,7 +348,7 @@ async fn http_workflow(pool: PgPool) {
     let storage = the_archive::storage::LocalStorage::initialize(dir.path())
         .await
         .unwrap();
-    let r = web::router(pool.clone(), "http://127.0.0.1:3000".into(), storage);
+    let r = common::client(&pool, storage).await;
     let (status, _, loc) = request(&r, "POST", "/franchises", "name=Zelda").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let f = loc

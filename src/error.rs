@@ -2,6 +2,7 @@
 pub enum Error {
     Validation(Vec<(String, String)>),
     Missing,
+    AuthInternal,
     TooLarge,
     Storage(std::io::Error),
     Task(tokio::task::JoinError),
@@ -18,6 +19,7 @@ impl From<sqlx::Error> for Error {
                 Some("23505") => {
                     let field = match d.constraint() {
                         Some("association_types_key_key") => "key",
+                        Some("accounts_username_unique") => "username",
                         Some("characters_name_unique") => "name in this franchise",
                         _ => "name",
                     };
