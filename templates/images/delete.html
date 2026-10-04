@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<p>Delete {{ image.original_filename }} from the archive? Its file and character memberships will be removed. The characters remain. This cannot be undone.</p>
+<form method="post" action="/images/{{ image.id }}/delete"><button>Confirm image deletion</button> <a href="/images/{{ image.id }}">Cancel</a></form>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+{% if !notice.is_empty() %}<p role="status" class="notice">{{ notice }}</p>{% endif %}
+<p><a href="/images/new">Upload artwork</a></p>
+<form method="get" class="filters">
+  <label>Character <select name="character"><option value="">All characters</option>
+    {% for c in characters %}<option value="{{ c.id }}" {% if selected == c.id.to_string() %}selected{% endif %}>{{ c.name }} · {{ c.franchise }}</option>{% endfor %}
+  </select></label><button>Filter</button><a href="/images">Reset</a>
+</form>
+<div class="gallery">
+{% for image in images %}
+<figure><a href="/images/{{ image.id }}"><img src="/images/{{ image.id }}/content" alt="{{ image.original_filename }}" loading="lazy" width="{{ image.width }}" height="{{ image.height }}"><figcaption>{{ image.original_filename }}</figcaption></a><small>{{ image.archived_at() }}</small></figure>
+{% else %}<p>No images on this page. Upload artwork, choose another character, or return to page 1.</p>{% endfor %}
+</div>
+<nav aria-label="Image gallery pages" class="pagination">
+{% if page > 1 %}<a href="/images?page={{ previous }}&amp;character={{ selected }}">Previous</a>{% endif %}
+<span>Page {{ page }}</span>
+{% if has_next %}<a href="/images?page={{ next }}&amp;character={{ selected }}">Next</a>{% endif %}
+{% if page > 1 %}<a href="/images?character={{ selected }}">First page</a>{% endif %}
+</nav>
+<p class="muted">M2 galleries serve original files; thumbnails are not generated.</p>
+{% endblock %}

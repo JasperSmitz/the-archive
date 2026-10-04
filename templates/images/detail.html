@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+{% if !notice.is_empty() %}<p role="status" class="notice">{{ notice }}</p>{% endif %}
+<p><a href="/images/{{ image.id }}/edit">Edit metadata and characters</a> · <a href="/images/{{ image.id }}/delete">Delete</a> · <a href="/images">Gallery</a></p>
+<img class="artwork" src="/images/{{ image.id }}/content" alt="{{ image.original_filename }}" width="{{ image.width }}" height="{{ image.height }}">
+<dl>
+<dt>Original filename</dt><dd>{{ image.original_filename }}</dd>
+<dt>Dimensions</dt><dd>{{ image.width }} × {{ image.height }} pixels</dd>
+<dt>File</dt><dd>{{ image.content_type }} · {{ image.byte_size }} bytes</dd>
+<dt>Uploader attribution</dt><dd><a href="/people/{{ image.uploaded_by_person_id }}">{{ image.uploader_name }}</a> (manually selected)</dd>
+<dt>Archived</dt><dd>{{ image.archived_at() }}</dd>
+<dt>Artist</dt><dd>{% if let Some(artist) = image.artist %}{{ artist }}{% else %}Not recorded{% endif %}</dd>
+<dt>Source</dt><dd>{% if let Some(source) = image.source_url %}<a href="{{ source }}" target="_blank" rel="noopener noreferrer">View recorded source</a>{% else %}Not recorded{% endif %}</dd>
+</dl>
+<h2>Characters</h2>
+<ul>{% for c in characters %}<li><a href="/characters/{{ c.id }}">{{ c.name }}</a> · {{ c.franchise }}</li>{% else %}<li>Uncategorized artwork: no characters attached yet.</li>{% endfor %}</ul>
+{% endblock %}

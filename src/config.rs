@@ -2,6 +2,7 @@ pub struct Config {
     pub database_url: String,
     pub listen: String,
     pub origin: String,
+    pub image_storage_dir: std::path::PathBuf,
 }
 impl Config {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -23,6 +24,9 @@ impl Config {
             database_url: std::env::var("DATABASE_URL")?,
             listen,
             origin: u.origin().ascii_serialization(),
+            image_storage_dir: std::env::var_os("IMAGE_STORAGE_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| "./var/images".into()),
         })
     }
 }

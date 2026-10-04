@@ -1,3 +1,4 @@
+pub mod images;
 use serde::Deserialize;
 use sqlx::FromRow;
 #[derive(Clone, Debug, FromRow)]

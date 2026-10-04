@@ -28,13 +28,13 @@ fn render(p: Page, status: StatusCode) -> Response {
         }
     }
 }
-fn failure(e: Error) -> Response {
+pub(super) fn failure(e: Error) -> Response {
     let (status, message) = error_message(e);
     let mut p = Page::new("Unable to complete request", "error", "");
     p.error = message;
     render(p, status)
 }
-fn error_message(e: Error) -> (StatusCode, String) {
+pub(super) fn error_message(e: Error) -> (StatusCode, String) {
     match e {
         Error::Validation(fields) => (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -44,6 +44,24 @@ fn error_message(e: Error) -> (StatusCode, String) {
                 .collect::<Vec<_>>()
                 .join(" "),
         ),
+        Error::TooLarge => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Image files must be at most 20 MiB (request limit: 20 MiB + 64 KiB).".into(),
+        ),
+        Error::Storage(e) => {
+            tracing::error!(error=%e,"image storage operation failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "The image storage operation failed. Please try again.".into(),
+            )
+        }
+        Error::Task(e) => {
+            tracing::error!(error=%e,"image decoding task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "The image could not be processed. Please try again.".into(),
+            )
+        }
         Error::Missing => (StatusCode::NOT_FOUND, "Record not found.".into()),
         Error::Conflict(s) => (StatusCode::CONFLICT, s),
         Error::Unexpected(e) => {

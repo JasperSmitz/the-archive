@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+{% if people.is_empty() %}<p>Create a <a href="/people/new">person</a> before uploading, so the image has uploader attribution.</p>{% endif %}
+<form method="post" {% if id == 0 %}enctype="multipart/form-data" action="/images"{% else %}action="/images/{{ id }}/edit"{% endif %}>
+{% if id == 0 %}<label>Image file<input type="file" name="file" accept="image/jpeg,image/png,image/webp" required><small>Static JPEG, PNG, or WebP; up to 20 MiB, 12,000 pixels per axis, and 40 million decoded pixels. Select the file again after any upload error.</small></label>{% endif %}
+<label>Uploader attribution<select name="uploader" required><option value="">Choose a person</option>{% for p in people %}<option value="{{ p.id }}" {% if values.uploader == p.id.to_string() %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select><small>Choose who added this artwork to the archive. This is a manual attribution and can be corrected later.</small></label>
+<label>Artist (optional)<input name="artist" value="{{ values.artist }}"><small>Plain text, up to 200 characters.</small></label>
+<label>Source URL (optional)<input name="source_url" type="url" value="{{ values.source_url }}"><small>Absolute HTTP or HTTPS URL, no credentials; up to 2,048 characters. Recorded as metadata only.</small></label>
+<fieldset><legend>Characters (optional)</legend><p>Attach shared artwork to any number of characters, or leave it uncategorized.</p>
+{% for c in characters %}<label class="choice"><input type="checkbox" name="characters" value="{{ c.id }}" {% if values.characters.contains(&c.id.to_string()) %}checked{% endif %}> {{ c.name }} · {{ c.franchise }}</label>{% else %}<p>No characters yet. You can attach them after <a href="/characters/new">creating characters</a>.</p>{% endfor %}</fieldset>
+<button>{% if id == 0 %}Archive image{% else %}Save metadata{% endif %}</button> <a href="{% if id == 0 %}/images{% else %}/images/{{ id }}{% endif %}">Cancel</a>
+</form>
+{% endblock %}

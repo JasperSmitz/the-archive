@@ -2,6 +2,9 @@
 pub enum Error {
     Validation(Vec<(String, String)>),
     Missing,
+    TooLarge,
+    Storage(std::io::Error),
+    Task(tokio::task::JoinError),
     Conflict(String),
     Unexpected(sqlx::Error),
 }
@@ -21,6 +24,15 @@ impl From<sqlx::Error> for Error {
                     return Self::Conflict(format!("A record with this {field} already exists."));
                 }
                 Some("23503") => {
+                    if matches!(
+                        d.constraint(),
+                        Some(
+                            "images_uploaded_by_person_id_fkey"
+                                | "person_character_associations_person_id_fkey"
+                        )
+                    ) {
+                        return Self::Conflict("This person has character associations or image uploader attributions. Remove the associations and correct uploader attributions or delete those images before deleting the person.".into());
+                    }
                     let record = match d.constraint() {
                         Some("characters_franchise_id_fkey") => "franchise",
                         Some("person_character_associations_person_id_fkey") => "person",
@@ -45,3 +57,10 @@ impl From<sqlx::Error> for Error {
         Self::Unexpected(e)
     }
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for Error {}

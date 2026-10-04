@@ -344,7 +344,11 @@ async fn request(
 }
 #[sqlx::test(migrations = "./migrations")]
 async fn http_workflow(pool: PgPool) {
-    let r = web::router(pool.clone(), "http://127.0.0.1:3000".into());
+    let dir = tempfile::tempdir().unwrap();
+    let storage = the_archive::storage::LocalStorage::initialize(dir.path())
+        .await
+        .unwrap();
+    let r = web::router(pool.clone(), "http://127.0.0.1:3000".into(), storage);
     let (status, _, loc) = request(&r, "POST", "/franchises", "name=Zelda").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let f = loc

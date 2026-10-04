@@ -6,7 +6,7 @@ use crate::{
 use sqlx::PgPool;
 pub async fn tag(pool: &PgPool, character: i64, tag: i64, remove: bool) -> Result<(), Error> {
     catalog::get(pool, Kind::Characters, character).await?;
-    catalog::get(pool, Kind::Tags, tag).await?;
+    related(pool, Kind::Tags, tag, "tag_id").await?;
     sqlx::query(if remove {
         "DELETE FROM character_tags WHERE character_id=$1 AND tag_id=$2"
     } else {
@@ -25,13 +25,9 @@ pub async fn associate(
     kind: i64,
     remove: bool,
 ) -> Result<(), Error> {
-    for (k, v) in [
-        (Kind::Characters, character),
-        (Kind::People, person),
-        (Kind::Types, kind),
-    ] {
-        catalog::get(pool, k, v).await?;
-    }
+    catalog::get(pool, Kind::Characters, character).await?;
+    related(pool, Kind::People, person, "person_id").await?;
+    related(pool, Kind::Types, kind, "association_type_id").await?;
     sqlx::query(if remove {"DELETE FROM person_character_associations WHERE character_id=$1 AND person_id=$2 AND association_type_id=$3"}else{"INSERT INTO person_character_associations(character_id,person_id,association_type_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING"}).bind(character).bind(person).bind(kind).execute(pool).await?;
     Ok(())
 }
@@ -40,4 +36,17 @@ pub async fn tags(pool: &PgPool, c: i64) -> Result<Vec<Record>, Error> {
 }
 pub async fn associations(pool: &PgPool, c: i64) -> Result<Vec<Association>, Error> {
     Ok(sqlx::query_as("SELECT a.person_id,a.association_type_id,p.name AS person,t.label FROM person_character_associations a JOIN people p ON p.id=a.person_id JOIN association_types t ON t.id=a.association_type_id WHERE a.character_id=$1 ORDER BY lower(p.name),lower(t.label),p.id,t.id").bind(c).fetch_all(pool).await?)
+}
+
+async fn related(pool: &PgPool, k: Kind, id: i64, field: &str) -> Result<(), Error> {
+    catalog::get(pool, k, id)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            Error::Missing => Error::Validation(vec![(
+                field.into(),
+                "This selection no longer exists. Choose an existing record.".into(),
+            )]),
+            e => e,
+        })
 }

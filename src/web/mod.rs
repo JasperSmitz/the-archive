@@ -1,5 +1,6 @@
 mod forms;
 mod handlers;
+mod images;
 mod templates;
 use axum::{Router, middleware, routing::get};
 use sqlx::PgPool;
@@ -7,9 +8,29 @@ use sqlx::PgPool;
 pub struct State {
     pub pool: PgPool,
     pub origin: String,
+    pub storage: crate::storage::LocalStorage,
 }
-pub fn router(pool: PgPool, origin: String) -> Router {
+pub fn router(pool: PgPool, origin: String, storage: crate::storage::LocalStorage) -> Router {
     Router::new()
+        .route(
+            "/images",
+            get(images::gallery)
+                .post(images::upload)
+                .layer::<_, std::convert::Infallible>(axum::extract::DefaultBodyLimit::max(
+                    images::REQUEST_LIMIT,
+                ))
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(
+                    images::REQUEST_LIMIT,
+                )),
+        )
+        .route("/images/new", get(images::new))
+        .route("/images/{id}", get(images::detail))
+        .route("/images/{id}/edit", get(images::edit).post(images::update))
+        .route(
+            "/images/{id}/delete",
+            get(images::confirm).post(images::delete),
+        )
+        .route("/images/{id}/content", get(images::content))
         .route("/", get(handlers::home))
         .route(
             "/static/app.css",
@@ -49,5 +70,9 @@ pub fn router(pool: PgPool, origin: String) -> Router {
                     tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
                 ),
         )
-        .with_state(State { pool, origin })
+        .with_state(State {
+            pool,
+            origin,
+            storage,
+        })
 }
