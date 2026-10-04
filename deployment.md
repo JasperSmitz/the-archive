@@ -23,12 +23,17 @@ Docker is unavailable in the implementation environment. **Container build/runti
 | --- | --- |
 | `APP_ENV` | `production` (required; no development fallback) |
 | `DATABASE_URL` | Direct Neon URL, preferably `postgresql://<user>:<encoded-password>@<direct-host>/<database>?sslmode=verify-full` |
+| `PORT` | `3000`; Railway uses this for health checks even with an explicit domain target port |
 | `LISTEN_ADDR` | `0.0.0.0:3000`; literal numeric port, no `$PORT` expansion |
 | `APP_ORIGIN` | `https://<final-domain>`; scheme/host/optional port only |
 | `IMAGE_STORAGE_DIR` | `/data/images` |
 | `RUST_LOG` | `the_archive=info,tower_http=info`; avoid verbose third-party logs |
 | `RAILWAY_RUN_UID` | `0` for the permission-initializing entrypoint described below |
 | `MAINTENANCE_MODE` | `true` during bootstrap/import/backups; `false` for use |
+
+Set **both** `PORT=3000` and `LISTEN_ADDR=0.0.0.0:3000`. The application reads LISTEN_ADDR; Railway reads PORT to choose the health-check port. Choosing domain target port 3000 alone does not configure the health-check probe. See [Railway health-check ports](https://docs.railway.com/deployments/healthchecks#configure-the-healthcheck-port).
+
+If health fails, first check deployment logs for `the-archive ready` with address `0.0.0.0:3000`. Before that message, configuration, database connection/migrations, or volume initialization may have failed. `/healthz` is public and returns 200 even in maintenance mode; accounts are not required. Inspect the first startup error rather than disabling authentication or changing APP_ORIGIN to the health-check hostname.
 
 No application signing secret is needed. All browser cookies are HttpOnly, SameSite=Lax, Path=/, with Secure enforced in production. Missing/insecure/malformed production origins and database URLs without required TLS fail configuration. Production requires an explicit storage path. `.env` is optional and never replaces explicit variables; `.dockerignore` excludes it.
 
@@ -91,6 +96,8 @@ Set `MAINTENANCE_MODE=false` and redeploy only after accounts/import checks. Ver
 ## Coordinated backup (local or Railway)
 
 **Stop all application writers**, including other app copies and admin/migration commands. Locally stop the Rust process; leave PostgreSQL up. On Railway set `MAINTENANCE_MODE=true`, redeploy, wait for the new instance, and verify both a catalog GET and login POST return 503. Health remains 200. Ensure old deployments have stopped. The mode blocks login/logout and session cleanup too; do not issue admin commands during the snapshot.
+
+If Clerk is enabled, signed Discord PING still works; authorized retrieval commands receive a private maintenance notice without querying records/files. Wait up to 60 seconds for existing retrieval jobs to finish or stop the process before destructive file maintenance/restore. No Discord registration operation belongs in startup or pre-deploy.
 
 The scripts use libpq `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGSSLMODE` and `PGPASSFILE`; secrets need not appear in arguments. `PGDATABASE` must be a database name, never a URL. For Neon use its direct hostname and `PGSSLMODE=verify-full`. Create the password file interactively/private editor with mode 0600, containing `host:port:database:user:password` (escape `:` and `\` as libpq requires). Do not commit it. See [PostgreSQL password-file rules](https://www.postgresql.org/docs/17/libpq-pgpass.html). Avoid printing credentials or full `DATABASE_URL` in shared logs.
 
@@ -195,3 +202,13 @@ With **all uploads stopped** (maintenance mode and no other writers), first insp
 Only generated regular final/temp files are considered, without following links/recursion, and only after a **24-hour grace period**. Recent/future-dated files and unrelated files are ignored. Use the correct database/storage pair. Orphan cleanup cannot restore missing image bytes or prove that an uncertain commit failed. For missing content, keep the record while recovering its exact generated file from the matching backup, or explicitly delete the stale record through the UI; missing files do not prevent record deletion. For an uncertain commit, first check the recovered database before considering offline cleanup.
 
 TD-002 thumbnails and TD-003 deployment-tier memory measurement remain open. TD-004 now has ordinary backup/restore evidence, but crash/power-loss experiments remain unverified. Before hosted reliance, test these procedures with the real volume and database, check restore permissions/bytes, and maintain backups outside the provider volume. GitHub code deployment/rollback never replaces data backup or reverses migrations.
+
+## Optional Librarian Clerk M1
+
+The owner reports the existing site is deployed and functional. Clerk code prepares an optional read-only Discord HTTP interaction interface on the same instance; **real Discord portal setup, registration, installation, and hosted acceptance remain owner-unverified**. No provider actions were performed for this milestone. Keep the current Railway `PORT=3000`/listener/Neon/volume/domain configuration.
+
+Follow [docs/DISCORD.md](docs/DISCORD.md) for exact portal and registration instructions and the [roadmap](docs/ROADMAP.md) for product scope. Supply `DISCORD_ENABLED=true`, `DISCORD_APPLICATION_ID`, the portal `DISCORD_PUBLIC_KEY`, `DISCORD_GUILD_ID`, and `DISCORD_ALLOWED_USER_IDS=<first-id>,<second-id>` in the existing service. With the integration enabled, APP_ORIGIN is capped at 300 bytes so protected links fit bounded Discord fields. The server needs no bot token. `DISCORD_BOT_TOKEN` is only for the explicit `discord commands register` CLI; read it through the documented hidden prompt in a private terminal and remove it afterward.
+
+`discord commands print` is offline; both Discord CLI commands bypass DB/storage initialization. Registration individually upserts the four guild CHAT_INPUT commands and preserves unrelated commands; it never globally registers/bulk-deletes or runs automatically. The portal endpoint is `https://<existing-origin>/discord/interactions`. Raw signatures and app/guild/user allowlists protect it independently of website sessions; original images remain login-protected.
+
+Removing a website account does not revoke Discord access. Remove that Discord ID/redeploy or disable the integration/redeploy. Ephemeral artwork delivery copies an original to Discord (maximum 8 MiB, possibly less); recipients can download/forward it, and website logout/deletion cannot revoke that copy. Restart can interrupt a deferred command; rerun it. No schema migration or data transfer is necessary for Clerk.

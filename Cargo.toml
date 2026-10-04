@@ -18,7 +18,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
 png = "0.18"
 image-webp = "0.2"
 zune-jpeg = "0.5"
@@ -28,11 +28,14 @@ argon2 = "0.5"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rpassword = "7"
 http-body-util = "0.1"
+futures-core = "0.3"
+serde_json = "1"
+ed25519-dalek = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
-futures-core = "0.3"
 
 [profile.dev]
 debug = 0

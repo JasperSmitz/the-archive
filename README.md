@@ -2,6 +2,8 @@
 
 A private, locally runnable character catalog and artwork archive. M1 supports people, franchises, characters, tags, and extensible association types. M2 adds shared artwork stored on local disk, with metadata and character memberships in PostgreSQL. M3 protects the archive with provisioned accounts and PostgreSQL-backed sessions, and prepares a single-instance container deployment. All operations use server-rendered HTML and ordinary forms; JavaScript is unnecessary.
 
+Product direction and milestone sequencing: [The Archive / The Librarian roadmap](docs/ROADMAP.md). Librarian Clerk M1 adds optional deterministic, read-only Discord retrieval: [setup and command guide](docs/DISCORD.md), [implementation brief](docs/LIBRARIAN_M1_PROMPT.md). Clerk uses SQL, not an AI model; later roadmap capabilities remain plans. Real Discord setup/registration/hosted acceptance are owner steps.
+
 ## Prerequisites and startup
 
 Install stable Rust (validated with Rust 1.96.0), Docker with the Compose plugin, and PostgreSQL 17 client tools (`pg_dump`, `pg_restore`, `psql`) for recovery tests and backups. The database uses PostgreSQL 17; the application runs on the host.
@@ -25,6 +27,18 @@ Stop the application with Ctrl-C (or SIGTERM). `docker compose stop` stops Postg
 
 For a complete manual M1–M3 walkthrough, see [testing.md](testing.md).
 
+## Optional Discord retrieval
+
+[The Librarian setup guide](docs/DISCORD.md) covers the four read-only guild commands: `/character`, `/images`, `/random-image`, and `/characters`. The integration defaults off. Enable it with the application ID/public key, one guild ID, and both allowed Discord user IDs in `.env.example`; the owner handles portal installation/endpoint validation and deployment. Website accounts and catalog people remain separate from Discord access principals.
+
+```sh
+cargo run --locked -- discord commands print
+# Only after owner setup, with DISCORD_BOT_TOKEN read privately as documented:
+cargo run --locked -- discord commands register
+```
+
+Printing is offline; registration does not initialize DB/storage and only upserts those four guild commands. No token is needed by the running server. Removing a website account does not revoke Discord access; edit the allowlist/redeploy or disable the integration. Ephemeral attachments copy artwork to Discord; recipients can retain/forward copies. Restarts can interrupt deferred retrieval; rerun the command. No domain migration or model service is added. Protocol handlers live in `src/discord`; reusable bounded exact queries live in `src/app/retrieval`.
+
 ## Tests and checks
 
 Integration tests require a running real PostgreSQL server. SQLx creates separate uniquely named test databases, applies migrations to each, and cleans up successful tests. Tests never truncate or clear the catalog database. The test login needs `LOGIN` and `CREATEDB`, and access to the `postgres` maintenance database. The local Compose user is a superuser suitable for these local tests; do not reuse these credentials outside local development. Failed SQLx test databases may be retained for inspection.
@@ -36,11 +50,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 DATABASE_URL=postgres://archive:archive_local@127.0.0.1:5432/postgres cargo test
 ```
 
-Tests provision real accounts and obtain cookies through the login route; authentication is never disabled in tests. Recovery tests invoke the installed PostgreSQL client tools (set `PG_BIN=/path/to/bin` if they are outside PATH). Tests cover accounts, password resets/disabling, session digests/expiry/revocation/restart persistence, cookies, protected routes, safe returns, rate limiting, maintenance mode, configuration, CLI administration, and a real M2 dump/restore followed by M3 migration/bootstrap. They also cover M1 behavior plus image constraints, all three formats, complete decoding and rejection of corrupt/animated inputs, injectable size/dimension/pixel/allocation policies, filename/path handling, metadata validation and escaping, uncategorized/shared images, duplicate races, transaction failure cleanup, deletion and missing files, gallery pagination, orphan maintenance, and a PostgreSQL-backed multipart HTTP workflow. Image tests generate tiny fixtures locally and use isolated temporary directories, never the configured development image archive. If PostgreSQL is unavailable, integration tests fail rather than silently skip.
+Tests provision real accounts and obtain cookies through the login route; authentication is never disabled in tests. Recovery tests invoke the installed PostgreSQL client tools (set `PG_BIN=/path/to/bin` if they are outside PATH). Tests cover accounts, password resets/disabling, session digests/expiry/revocation/restart persistence, cookies, protected routes, safe returns, rate limiting, maintenance mode, configuration, CLI administration, and a real M2 dump/restore followed by M3 migration/bootstrap. They also cover M1 behavior plus image constraints, all three formats, complete decoding and rejection of corrupt/animated inputs, injectable size/dimension/pixel/allocation policies, filename/path handling, metadata validation and escaping, uncategorized/shared images, duplicate races, transaction failure cleanup, deletion and missing files, gallery pagination, orphan maintenance, and a PostgreSQL-backed multipart HTTP workflow. Image tests generate tiny fixtures locally and use isolated temporary directories, never the configured development image archive. Clerk tests additionally use generated Ed25519 keys and a fake loopback Discord API to cover signatures/authorization, exact queries, bounded attachments, admission/replay/delivery errors, and native signed-PING/maintenance/restart smoke. No test contacts real Discord or needs a real token. If PostgreSQL is unavailable, integration tests fail rather than silently skip.
 
 ## Boundaries and request protection
 
-Private catalog pages, galleries, originals, and mutations require a provisioned login. There is no public registration or password-reset email. Only `/login`, `/static/app.css`, and `/healthz` are public. Unauthenticated page reads redirect to login; original-image reads and mutations return 401. Sign out uses POST. Authenticated HTML and authentication responses use `private, no-store`; images retain private caching and vary by Cookie. Health is a process-liveness check returning only `ok`: startup connects and migrates before listening, but health does not continually probe PostgreSQL.
+Private catalog pages, galleries, originals, and mutations require a provisioned login. There is no public registration or password-reset email. Browser-public routes are `/login`, `/static/app.css`, and `/healthz`. Optional POST `/discord/interactions` uses raw Ed25519 verification plus independent app/guild/user allowlists, without browser cookies; it defaults to 404. Unauthenticated page reads redirect to login; original-image reads and mutations return 401. Sign out uses POST. Authenticated HTML and authentication responses use `private, no-store`; images retain private caching and vary by Cookie. Health is a process-liveness check returning only `ok`: startup connects and migrates before listening, but health does not continually probe PostgreSQL.
 
 The default listener and Compose database port bind to loopback. Production requires HTTPS `APP_ORIGIN`, an explicit storage directory, and a PostgreSQL URL explicitly requiring TLS. Cookie security is derived from `APP_ENV`, never forwarded headers: HttpOnly, SameSite=Lax, Path=/, and Secure in production, with no Domain. Follow [deployment.md](deployment.md) before exposing the application. This remains a small, single-instance private application rather than a multi-tenant service.
 
@@ -116,7 +130,7 @@ A global in-process rolling limiter admits 20 login submissions per minute, shar
 
 ## Backups, recovery, and deployment
 
-Back up PostgreSQL **and** the image directory together while all application writers are stopped. `MAINTENANCE_MODE=true` returns 503 for all routes except health/CSS, including login/logout; changing it requires a restart. Do not run account/migration/cleanup commands concurrently with a coordinated snapshot. The database must remain running. Use [scripts/backup.sh](scripts/backup.sh) and [scripts/restore.sh](scripts/restore.sh); restoration refuses a populated database or nonempty image destination. Dumps include sensitive private data, password hashes and session digests. Keep them encrypted/private and outside Git and the live archive.
+Back up PostgreSQL **and** the image directory together while all application writers are stopped. `MAINTENANCE_MODE=true` returns 503 for browser routes except health/CSS, including login/logout; changing it requires a restart. Signed Discord PING still responds, while authorized commands return an ephemeral maintenance notice without retrieving data. Wait for existing retrieval jobs to drain (up to 60 seconds) before file maintenance. Do not run account/migration/cleanup commands concurrently with a coordinated snapshot. The database must remain running. Use [scripts/backup.sh](scripts/backup.sh) and [scripts/restore.sh](scripts/restore.sh); restoration refuses a populated database or nonempty image destination. Dumps include sensitive private data, password hashes and session digests. Keep them encrypted/private and outside Git and the live archive.
 
 [deployment.md](deployment.md) contains exact local and Railway account, backup, isolated restore, and M2 import instructions, provider steps, volume ownership handling, and outstanding verification. A restored M2 dump retains its applied migration history; migrate only **after** restoring into the empty destination. Code rollback never reverses database migrations.
 

@@ -10,8 +10,10 @@ pub enum Command {
     AccountReset(String, bool),
     AccountDisable(String),
     Orphans(bool),
+    DiscordPrint,
+    DiscordRegister,
 }
-pub const USAGE: &str = "Usage: the-archive [serve | migrate | sessions cleanup | account list | account create USER [--password-stdin] | account reset-password USER [--password-stdin] | account disable USER | cleanup-orphans [--apply]]";
+pub const USAGE: &str = "Usage: the-archive [serve | migrate | sessions cleanup | account list | account create USER [--password-stdin] | account reset-password USER [--password-stdin] | account disable USER | cleanup-orphans [--apply] | discord commands print | discord commands register]";
 pub fn parse(args: &[String]) -> Result<Command, &'static str> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
@@ -29,6 +31,8 @@ pub fn parse(args: &[String]) -> Result<Command, &'static str> {
         ] => account(action, name, true),
         ["cleanup-orphans"] => Ok(Command::Orphans(false)),
         ["cleanup-orphans", "--apply"] => Ok(Command::Orphans(true)),
+        ["discord", "commands", "print"] => Ok(Command::DiscordPrint),
+        ["discord", "commands", "register"] => Ok(Command::DiscordRegister),
         _ => Err(USAGE),
     }
 }

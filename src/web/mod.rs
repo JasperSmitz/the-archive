@@ -26,6 +26,16 @@ pub fn router_with_mode(
     environment: crate::config::Environment,
     maintenance: bool,
 ) -> Router {
+    router_with_discord(pool, origin, storage, environment, maintenance, None)
+}
+pub fn router_with_discord(
+    pool: PgPool,
+    origin: String,
+    storage: crate::storage::LocalStorage,
+    environment: crate::config::Environment,
+    maintenance: bool,
+    discord: Option<std::sync::Arc<crate::discord::Runtime>>,
+) -> Router {
     let auth = auth::AuthState {
         pool: pool.clone(),
         environment,
@@ -108,6 +118,9 @@ pub fn router_with_mode(
             maintenance,
             maintenance_mode,
         ))
+        // Only this exact POST endpoint is outside browser auth/origin/maintenance layers.
+        // It applies signature verification and independent authorization instead.
+        .merge(crate::discord::routes(discord))
         .layer(middleware::from_fn(auth::cache_policy))
         .layer(
             tower_http::trace::TraceLayer::new_for_http()

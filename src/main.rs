@@ -15,6 +15,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
     let command = cli::parse(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    if command == Command::DiscordPrint {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&the_archive::discord::commands::manifest())?
+        );
+        return Ok(());
+    }
+    if command == Command::DiscordRegister {
+        use the_archive::discord::{client::Client, config::snowflake};
+        let application = snowflake(
+            &std::env::var("DISCORD_APPLICATION_ID")
+                .map_err(|_| "DISCORD_APPLICATION_ID is required")?,
+        )?;
+        let guild = snowflake(
+            &std::env::var("DISCORD_GUILD_ID").map_err(|_| "DISCORD_GUILD_ID is required")?,
+        )?;
+        let token = std::env::var("DISCORD_BOT_TOKEN")
+            .map_err(|_| "DISCORD_BOT_TOKEN is required only for explicit registration")?;
+        let names = tokio::time::timeout(std::time::Duration::from_secs(60), Client::new()?.register(application, guild, &token)).await.map_err(|_| "Discord registration timed out; some commands may have been upserted. Rerun safely.")??;
+        for name in names {
+            println!("Upserted guild command /{name}");
+        }
+        return Ok(());
+    }
     // Full production configuration is validated before connecting/serving. Admin commands
     // need only the database; they work even when the volume is unavailable.
     let config = if command == Command::Serve {
@@ -23,6 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let database = Config::load_database()?;
+    let discord_config = if command == Command::Serve {
+        the_archive::discord::config::Config::load()?
+    } else {
+        None
+    };
+    if discord_config.is_some() && config.as_ref().is_some_and(|c| c.origin.len() > 300) {
+        return Err("Enabled Discord links require APP_ORIGIN at most 300 bytes".into());
+    }
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
         .connect(&database)
@@ -100,13 +132,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     |_| "IMAGE_STORAGE_DIR could not be used; check the directory and permissions",
                 )?;
             let listener = tokio::net::TcpListener::bind(&c.listen).await?;
+            let discord = discord_config
+                .map(|config| {
+                    Ok::<_, the_archive::discord::client::Failure>(
+                        the_archive::discord::Runtime::new(
+                            config,
+                            pool.clone(),
+                            storage.clone(),
+                            c.origin.clone(),
+                            c.maintenance,
+                            the_archive::discord::client::Client::new()?,
+                        ),
+                    )
+                })
+                .transpose()?;
             tracing::info!(address=%c.listen, maintenance=c.maintenance,"the-archive ready");
+            let shutdown_discord = discord.clone();
             axum::serve(
                 listener,
-                web::router_with_mode(pool, c.origin, storage, c.environment, c.maintenance),
+                web::router_with_discord(
+                    pool,
+                    c.origin,
+                    storage,
+                    c.environment,
+                    c.maintenance,
+                    discord.clone(),
+                ),
             )
-            .with_graceful_shutdown(shutdown())
+            .with_graceful_shutdown(async move {
+                shutdown().await;
+                if let Some(runtime) = shutdown_discord {
+                    // Begin bounded job drain immediately, independently of slow browser requests.
+                    runtime.stop_accepting();
+                    tokio::spawn(async move {
+                        runtime.shutdown().await;
+                    });
+                }
+            })
             .await?;
+            if let Some(discord) = discord {
+                discord.shutdown().await;
+            }
+        }
+        Command::DiscordPrint | Command::DiscordRegister => {
+            return Err("Discord CLI dispatch failed".into());
         }
     }
     Ok(())

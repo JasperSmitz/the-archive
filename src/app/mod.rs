@@ -3,6 +3,7 @@ pub mod auth;
 pub mod catalog;
 pub mod characters;
 pub mod images;
+pub mod retrieval;
 use crate::error::Error;
 pub fn text(field: &str, value: &str, max: usize) -> Result<String, Error> {
     let v = value.trim();
