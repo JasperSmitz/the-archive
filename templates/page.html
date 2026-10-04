@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if mode == "list" %}
+<p>
+<a href="/{{ kind }}/new">Create {{ kind }}</a>
+</p>
+{% if kind == "characters" %}
+<form method="get" class="filters">
+<label>Franchise<select name="franchise">
+<option value="">All</option>
+{% for r in franchises %}
+<option value="{{ r.id }}" 
+{% if filters.franchise == Some(*r.id) %}
+selected
+{% endif %}
+>{{ r.name }}</option>
+{% endfor %}
+</select>
+</label>
+<label>Person<select name="person">
+<option value="">All</option>
+{% for r in people %}
+<option value="{{ r.id }}" 
+{% if filters.person == Some(*r.id) %}
+selected
+{% endif %}
+>{{ r.name }}</option>
+{% endfor %}
+</select>
+</label>
+<label>Association type<select name="association_type">
+<option value="">All</option>
+{% for r in types %}
+<option value="{{ r.id }}" 
+{% if filters.association_type == Some(*r.id) %}
+selected
+{% endif %}
+>{{ r.name }}</option>
+{% endfor %}
+</select>
+</label>
+<label>Tag<select name="tag">
+<option value="">All</option>
+{% for r in tags %}
+<option value="{{ r.id }}" 
+{% if filters.tag == Some(*r.id) %}
+selected
+{% endif %}
+>{{ r.name }}</option>
+{% endfor %}
+</select>
+</label>
+<button>Filter</button>
+<a href="/characters">Reset</a>
+</form>
+<ul>
+{% for c in characters %}
+<li>
+<a href="/characters/{{ c.id }}">{{ c.name }}</a> · {{ c.franchise }}</li>
+{% else %}
+<li>No characters match. Create a franchise, then a character, or reset filters.</li>
+{% endfor %}
+</ul>
+{% else %}
+<ul>
+{% for r in records %}
+<li>
+<a href="/{{ kind }}/{{ r.id }}">{{ r.name }}</a>
+</li>
+{% else %}
+<li>No records yet. Use Create to add one.</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% else if mode == "form" %}
+<form method="post" action="
+{% if id == 0 %}
+/{{ kind }}
+{% else %}
+/{{ kind }}/{{ id }}/edit
+{% endif %}
+">
+<label>
+{% if kind == "types" %}
+Label
+{% else %}
+Name
+{% endif %}
+<input name="name" value="{{ name }}" required>
+</label>
+{% if kind == "types" %}
+
+{% if id == 0 %}
+<label>Key<input name="key" value="{{ key }}" required>
+<small>Lowercase snake_case; immutable after creation.</small>
+</label>
+{% else %}
+<p>Key: {{ key }} (immutable)</p>
+{% endif %}
+
+{% endif %}
+
+{% if kind == "characters" %}
+<label>Franchise<select name="franchise_id" required>
+<option value="">Choose a franchise</option>
+{% if self.invalid_franchise() %}
+<option value="{{ raw_franchise }}" selected>Invalid selection: {{ raw_franchise }}</option>
+{% endif %}
+
+{% for r in franchises %}
+<option value="{{ r.id }}" 
+{% if franchise_id == r.id %}
+selected
+{% endif %}
+>{{ r.name }}</option>
+{% endfor %}
+</select>
+</label>
+<label>Description<textarea name="description" rows="8">{{ description }}</textarea>
+</label>
+{% endif %}
+<button>Save</button> <a href="/{{ kind }}">Cancel</a>
+</form>
+{% else if mode == "delete" %}
+<p>Delete {{ name }}? This cannot be undone. Character associations and tag memberships are removed when deleting a character; deleting a tag removes its memberships. Records still in use may be protected.</p>
+<form method="post" action="/{{ kind }}/{{ id }}/delete">
+<button>Confirm deletion</button> <a href="/{{ kind }}/{{ id }}">Cancel</a>
+</form>
+{% else if mode == "detail" %}
+<p>
+<a href="/{{ kind }}/{{ id }}/edit">Edit</a> · <a href="/{{ kind }}/{{ id }}/delete">Delete</a> · <a href="/{{ kind }}">Back to list</a>
+</p>
+{% if kind == "types" %}
+<p>Key: {{ key }}</p>
+{% endif %}
+
+{% if kind == "characters" %}
+
+{% for f in franchises %}
+
+{% if f.id == franchise_id %}
+<p>Franchise: <a href="/franchises/{{ f.id }}">{{ f.name }}</a>
+</p>
+{% endif %}
+
+{% endfor %}
+<div class="description">{{ description }}</div>
+<h2>Tags</h2>
+{% for t in memberships %}
+<form method="post" action="/characters/{{ id }}/tags" class="inline">{{ t.name }}<input type="hidden" name="tag_id" value="{{ t.id }}">
+<input type="hidden" name="remove" value="true">
+<button aria-label="Remove tag {{ t.name }}">Remove</button>
+</form>
+{% else %}
+<p>No tags assigned.</p>
+{% endfor %}
+<form method="post" action="/characters/{{ id }}/tags">
+<label>Tag<select name="tag_id" required>
+<option value="">Choose a tag</option>
+{% if self.invalid_tag() %}
+<option value="{{ chosen_tag }}" selected>Invalid selection: {{ chosen_tag }}</option>
+{% endif %}
+
+{% for t in tags %}
+<option value="{{ t.id }}" 
+{% if chosen_tag == t.id.to_string() %}
+selected
+{% endif %}
+>{{ t.name }}</option>
+{% endfor %}
+</select>
+</label>
+<button>Add tag</button>
+</form>
+<h2>People and associations</h2>
+{% for a in associations %}
+<form method="post" action="/characters/{{ id }}/associations" class="inline">
+<a href="/people/{{ a.person_id }}">{{ a.person }}</a> · {{ a.label }}<input type="hidden" name="person_id" value="{{ a.person_id }}">
+<input type="hidden" name="association_type_id" value="{{ a.association_type_id }}">
+<input type="hidden" name="remove" value="true">
+<button>Remove</button>
+</form>
+{% else %}
+<p>No associations assigned.</p>
+{% endfor %}
+<form method="post" action="/characters/{{ id }}/associations">
+<label>Person<select name="person_id" required>
+<option value="">Choose a person</option>
+{% if self.invalid_person() %}
+<option value="{{ chosen_person }}" selected>Invalid selection: {{ chosen_person }}</option>
+{% endif %}
+
+{% for p in people %}
+<option value="{{ p.id }}" 
+{% if chosen_person == p.id.to_string() %}
+selected
+{% endif %}
+>{{ p.name }}</option>
+{% endfor %}
+</select>
+</label>
+<label>Type<select name="association_type_id" required>
+<option value="">Choose a type</option>
+{% if self.invalid_type() %}
+<option value="{{ chosen_type }}" selected>Invalid selection: {{ chosen_type }}</option>
+{% endif %}
+
+{% for t in types %}
+<option value="{{ t.id }}" 
+{% if chosen_type == t.id.to_string() %}
+selected
+{% endif %}
+>{{ t.name }}</option>
+{% endfor %}
+</select>
+</label>
+<button>Add association</button>
+</form>
+{% endif %}
+
+{% endif %}
+
+{% endblock %}
+
