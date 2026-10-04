@@ -820,7 +820,7 @@ async fn signed_full_retrieval_and_attachment_workflow(pool: PgPool) {
         p["id"] = json!((1000 + n).to_string());
         let deferred = json_response(router.clone().oneshot(request(&p)).await.unwrap()).await;
         assert_eq!(deferred["type"], 5);
-        assert_eq!(deferred["data"]["flags"], 64);
+        assert!(deferred["data"].get("flags").is_none());
         let (result, file) = decode(delivery(&mut fake).await).await;
         payload_bounds(&result);
         assert_eq!(result["allowed_mentions"]["parse"], json!([]));
@@ -1157,7 +1157,7 @@ fn offline_cli_and_enabled_startup_validation() {
 }
 
 #[sqlx::test]
-async fn failed_delivery_attempts_private_error_edit_and_releases_admission(pool: PgPool) {
+async fn failed_delivery_attempts_error_edit_and_releases_admission(pool: PgPool) {
     fixture(&pool).await;
     let root = tempfile::tempdir().unwrap();
     let storage = LocalStorage::initialize(root.path()).await.unwrap();

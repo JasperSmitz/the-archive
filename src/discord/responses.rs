@@ -68,7 +68,7 @@ pub fn immediate(text: &str) -> Value {
 fn reply(title: &str, description: &str, fields: Vec<Value>) -> Reply {
     // At most ten fields: 10*(64+420)+900+128 = 5,868, under the 6,000 embed total.
     Reply {
-        payload: json!({"content":"The Librarian · private Archive retrieval","allowed_mentions":{"parse":[]},"attachments":[],"embeds":[{"title":plain(title,128),"description":truncate(description,900),"fields":fields.into_iter().take(10).collect::<Vec<_>>()}]}),
+        payload: json!({"content":"The Librarian · Archive retrieval","allowed_mentions":{"parse":[]},"attachments":[],"embeds":[{"title":plain(title,128),"description":truncate(description,900),"fields":fields.into_iter().take(10).collect::<Vec<_>>()}]}),
         attachment: None,
     }
 }

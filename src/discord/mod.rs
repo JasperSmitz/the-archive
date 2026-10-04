@@ -151,13 +151,11 @@ impl Runtime {
         let delivered = matches!(&outcome, Some(Ok(Ok(Ok(())))));
         let cancelled = outcome.is_none();
         match outcome {
-            Some(Ok(Ok(Ok(())))) => tracing::info!(
-                interaction_id = id,
-                command = name,
-                "private retrieval delivered"
-            ),
+            Some(Ok(Ok(Ok(())))) => {
+                tracing::info!(interaction_id = id, command = name, "retrieval delivered")
+            }
             Some(Ok(Ok(Err(e)))) => {
-                tracing::warn!(interaction_id=id, command=name, outcome=?e, "private delivery failed")
+                tracing::warn!(interaction_id=id, command=name, outcome=?e, "delivery failed")
             }
             Some(Ok(Err(_))) => tracing::error!(
                 interaction_id = id,
@@ -194,7 +192,7 @@ impl Runtime {
         token: String,
         cap: u64,
     ) -> Result<(), client::Failure> {
-        // Leave time after domain/file preparation for delivery and a private error edit.
+        // Leave time after domain/file preparation for delivery and a error edit.
         let result = tokio::time::timeout(
             Duration::from_secs(35),
             responses::execute(&self.pool, &self.storage, &self.origin, &command, cap),
@@ -348,7 +346,7 @@ async fn interactions(
     // This avoids spawning domain work while the handler is still constructing its reply.
     let body = axum::body::Body::from_stream(Acknowledgement {
         bytes: Some(Bytes::from_static(
-            br#"{"type":5,"data":{"flags":64,"allowed_mentions":{"parse":[]}}}"#,
+            br#"{"type":5,"data":{"allowed_mentions":{"parse":[]}}}"#,
         )),
         start: Some(Box::new({
             let token = token.to_owned();
