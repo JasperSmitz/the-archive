@@ -883,49 +883,55 @@ async fn streamed_multipart_limits_without_content_length(pool: PgPool) {
             segment(footer),
         ],
     ];
-    for segments in cases {
+    for accept in ["text/html", "application/json"] {
+        for segments in cases.clone() {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/images")
+                .header("origin", "http://127.0.0.1:3000")
+                .header("accept", accept)
+                .header("content-type", "multipart/form-data; boundary=boundary")
+                .body(streamed(segments))
+                .unwrap();
+            assert!(!req.headers().contains_key("content-length"));
+            let response = r.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM images")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert!(entries(&d).is_empty());
+        }
+    }
+    let data = fixture("png", 77);
+    for (accept, status) in [
+        ("text/html", StatusCode::SEE_OTHER),
+        ("application/json", StatusCode::OK),
+    ] {
         let req = Request::builder()
             .method("POST")
             .uri("/images")
             .header("origin", "http://127.0.0.1:3000")
+            .header("accept", accept)
             .header("content-type", "multipart/form-data; boundary=boundary")
-            .body(streamed(segments))
+            .body(streamed(vec![
+                segment(header.as_bytes()),
+                segment(&data),
+                segment(footer),
+            ]))
             .unwrap();
         assert!(!req.headers().contains_key("content-length"));
-        let response = r.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(r.clone().oneshot(req).await.unwrap().status(), status);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM images")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
-            0
+            1
         );
-        assert!(entries(&d).is_empty());
+        assert_eq!(entries(&d).len(), 1);
     }
-    let data = fixture("png", 77);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/images")
-        .header("origin", "http://127.0.0.1:3000")
-        .header("content-type", "multipart/form-data; boundary=boundary")
-        .body(streamed(vec![
-            segment(header.as_bytes()),
-            segment(&data),
-            segment(footer),
-        ]))
-        .unwrap();
-    assert!(!req.headers().contains_key("content-length"));
-    assert_eq!(
-        r.oneshot(req).await.unwrap().status(),
-        StatusCode::SEE_OTHER
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM images")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        1
-    );
-    assert_eq!(entries(&d).len(), 1);
 }

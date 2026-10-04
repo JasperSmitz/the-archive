@@ -1,6 +1,6 @@
 # Manual walkthrough: M1–M3
 
-Use disposable test records for this walkthrough. Deletion is real; leave personal records alone. The app works without JavaScript. Accounts are access credentials; catalog people are separate domain subjects.
+Use disposable test records for this walkthrough. Deletion is real; leave personal records alone. Catalog, ordinary upload, and editing work without JavaScript; the optional bulk page needs its small browser script. Accounts are access credentials; catalog people are separate domain subjects.
 
 ## Local access and controls
 
@@ -146,3 +146,18 @@ PG_BIN=/tmp/archive-pg/bin DATABASE_URL=postgres://archive@127.0.0.1:55432/postg
 ```
 
 Tests create isolated databases and temporary image directories, never wipe your review catalog. Docker/container, actual Railway/Neon HTTPS/volume behavior, and deployment-tier memory still require provider-side verification. No deployment is performed by this walkthrough.
+
+## Bulk upload regression checklist
+
+Use disposable local artwork and records. No production or Discord testing is needed. Automated PostgreSQL tests use isolated databases/temp storage; the optional dependency-free browser harness (`BROWSER=/path/to/chromium python3 scripts/test-bulk-browser.py`, or `BROWSER=/path/to/firefox python3 scripts/test-bulk-browser.py --firefox`) exercises the real script/DOM with fake upload responses. To inspect it interactively, serve only copies of `tests/bulk-upload.html` and `static/bulk-upload.js` in a temporary directory on loopback; do not serve the repository root containing `.env`.
+
+1. Find Bulk upload from both Images and the ordinary upload form. Disable JavaScript: expect a useful ordinary upload link. Enable it again; create a person if no uploader exists.
+2. Select distinct JPEG/PNG/static WebP files, one corrupt/unsupported file, an over-20-MiB file, and a repeated file. Choose Alice, both Link and Venti, and shared artist/source. Confirm the warning that every new image receives both characters. Remove one selected file before starting. More than 100 total files should be rejected without adding that selection.
+3. Start, click again, and inspect browser Network: only one multipart POST `/images` at a time, one file each, `Accept: application/json`. Shared metadata/picker/start controls stay disabled during the run. Ordinary validation/413 failures continue; distinct successes have both memberships, repeated bytes are duplicate, and counts match rows. Follow a record in a new tab so selections are retained.
+4. Upload an already archived image with different uploader/artist/source/characters. Expect the existing ID and unchanged metadata/memberships, plus an Edit link. Correct one record through the normal editor; both ordinary upload and edit must still work without JavaScript.
+5. Stop during a request. It should settle and no next request start; explicitly resume pending files. Retry failed/unconfirmed files; uploaded/duplicate rows must be skipped. Changing shared metadata between runs changes only newly archived images.
+6. Sign out in a second tab or expire the session before the next file. Expect 401, a failed row, and no later requests. Keep the bulk page open, sign in using its new-tab link, then retry/resume explicitly. Wrong-origin requests still return 403 and originals still return 401 while logged out.
+7. On a disposable local instance, enter maintenance or simulate offline/server failure during an upload. Expect scheduling to pause, remaining File objects/values to survive, and unconfirmed for lost/unreliable responses. Restore availability and explicitly retry: an already committed image should become duplicate, never a second row. A two-minute request timeout is also unconfirmed. No automatic network retry.
+8. Check filenames/messages containing `<img onerror=…>` are visible text and cannot inject elements. Detail/editor links use protected numeric IDs. Navigate/reload only after noting that this loses unsaved page selections/results; already archived records/files persist. New batch explicitly discards local results, not saved images.
+
+Automated tests cover real multi-chunk requests without Content-Length exceeding both the total request cap and individual file cap, with 413 and no rows/files, plus a valid streamed HTML upload and JSON duplicate. They also cover shared memberships, uncategorized uploads, misleading MIME, partial failures, duplicate preservation/lost-response retry, safe bigint IDs, stale metadata, storage errors, authentication/origin/maintenance, protected originals, routing, and escaped options. Hosted proxy limits and deployment-tier memory remain operator checks.

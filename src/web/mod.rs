@@ -54,6 +54,7 @@ pub fn router_with_discord(
                 )),
         )
         .route("/images/new", get(images::new))
+        .route("/images/bulk", get(images::bulk))
         .route("/images/{id}", get(images::detail))
         .route("/images/{id}/edit", get(images::edit).post(images::update))
         .route(
@@ -110,6 +111,18 @@ pub fn router_with_discord(
                 )
             }),
         )
+        .route(
+            "/static/bulk-upload.js",
+            get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/javascript; charset=utf-8",
+                    )],
+                    include_str!("../../static/bulk-upload.js"),
+                )
+            }),
+        )
         .layer(middleware::from_fn_with_state(
             origin,
             handlers::same_origin,
@@ -145,7 +158,12 @@ async fn maintenance_mode(
     next: middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if enabled && !matches!(request.uri().path(), "/healthz" | "/static/app.css") {
+    if enabled
+        && !matches!(
+            request.uri().path(),
+            "/healthz" | "/static/app.css" | "/static/bulk-upload.js"
+        )
+    {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "The archive is paused for maintenance. Please try again later.",

@@ -1,0 +1,158 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bulk uploader browser regression tests</title>
+<!-- Minimal fixture uses the same controls as the Askama page. No real uploads. -->
+<section id="bulk-controls" hidden>
+<form id="bulk-form"><fieldset id="bulk-metadata">
+<select name="uploader" required><option value="1">Uploader</option></select>
+<input name="artist" value="Artist"><input name="source_url" type="url" value="">
+<input name="characters" type="checkbox" value="2" checked>
+<input name="characters" type="checkbox" value="3" checked>
+</fieldset><input id="bulk-files" type="file" multiple>
+<button id="bulk-start" type="submit">Start</button><button id="bulk-retry" type="button">Retry</button>
+<button id="bulk-stop" type="button">Stop</button><button id="bulk-reset" type="button">Reset</button>
+</form><p id="bulk-notice"></p><p id="bulk-summary"></p><progress id="bulk-progress"></progress>
+<table><tbody id="bulk-results"></tbody></table></section>
+<pre id="test-result">RUNNING</pre>
+<script type="module">
+import { UploadQueue, sendFile, batch } from "../static/bulk-upload.js";
+const result = document.getElementById("test-result");
+let passed = 0;
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const equal = (left, right, message) => assert(JSON.stringify(left) === JSON.stringify(right), message);
+const test = async (name, fn) => { await fn(); passed++; result.textContent += `\nPASS ${name}`; };
+const file = name => new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
+const metadata = () => ({ uploader: "1", artist: "Artist", source_url: "", characters: ["2", "3"] });
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const uploaded = id => ({ state: "uploaded", id, message: "Archived" });
+const response = (status, body, type = "application/json") => new Response(body, { status, headers: { "content-type": type } });
+try {
+    await test("Sequential requests, immutable snapshot, double start prevention", async () => {
+        const gate = deferred();
+        let active = 0, peak = 0, calls = 0;
+        const shared = metadata();
+        const queue = new UploadQueue(async (_, values) => {
+            active++; peak = Math.max(peak, active); calls++;
+            equal(values.characters, ["2", "3"], "Snapshot changed");
+            assert(values.artist === "Artist", "Artist changed");
+            if (calls === 1) await gate.promise;
+            active--; return uploaded(String(calls));
+        });
+        queue.addFiles([file("one.png"), file("two.png")]);
+        const run = queue.run("pending", shared);
+        shared.characters.push("9"); shared.artist = "Later";
+        await queue.run("pending", shared);
+        assert(calls === 1 && queue.running, "Duplicate/concurrent run");
+        gate.resolve(); await run;
+        assert(calls === 2 && peak === 1 && !queue.running, "Parallel upload");
+    });
+    await test("Stop settles current file, explicit resume retains pending", async () => {
+        const gate = deferred(); let calls = 0;
+        const queue = new UploadQueue(async () => { calls++; if (calls === 1) await gate.promise; return uploaded(String(calls)); });
+        queue.addFiles([file("a"), file("b")]);
+        const run = queue.run("pending", metadata()); queue.stop();
+        assert(queue.running && queue.files[0].state === "uploading", "Stop aborted current file");
+        gate.resolve(); await run;
+        equal(queue.files.map(x => x.state), ["uploaded", "pending"], "Stop scheduled next file");
+        await queue.run("pending", metadata());
+        assert(calls === 2, "Resume failed");
+    });
+    await test("Validation continues; explicit retry skips successes and duplicates", async () => {
+        let calls = 0;
+        const queue = new UploadQueue(async () => {
+            calls++;
+            return calls === 1 ? uploaded("1") : calls === 2 ? { state: "failed", message: "Corrupt" }
+                : { state: "duplicate", id: "1", message: "Already archived" };
+        });
+        queue.addFiles([file("a"), file("b"), file("c")]);
+        await queue.run("pending", metadata());
+        equal(queue.files.map(x => x.state), ["uploaded", "failed", "duplicate"], "Wrong mixed outcomes");
+        await queue.run("retry", metadata());
+        assert(calls === 4 && queue.files[1].state === "duplicate", "Retry included successes");
+    });
+    await test("Network/server/auth stops scheduling and retains selections", async () => {
+        for (const outcome of [{ state: "failed", message: "Sign in", halt: true }, { state: "unconfirmed", message: "Maintenance", halt: true }, null]) {
+            let calls = 0;
+            const queue = new UploadQueue(async () => { calls++; if (!outcome) throw new Error("lost response"); return outcome; });
+            queue.addFiles([file("a"), file("b")]);
+            await queue.run("pending", metadata());
+            assert(calls === 1 && queue.files[1].state === "pending", "Availability failure did not stop");
+            assert(queue.files[0].state === (outcome?.state || "unconfirmed"), "Lost response claimed failure");
+            queue.send = async () => ({ state: "duplicate", id: "1", message: "Safe retry" });
+            await queue.run("retry", metadata());
+            assert(queue.files[0].state === "duplicate" && queue.files[1].state === "pending", "Retry dropped pending");
+        }
+    });
+    await test("100-file bound, removal, reset and selection locking", async () => {
+        const queue = new UploadQueue(async () => uploaded("1"));
+        assert(!queue.addFiles(Array.from({ length: 101 }, () => file("a"))) && queue.files.length === 0, "Accepted 101 files");
+        queue.addFiles([file("a"), file("b")]); queue.remove(queue.files[0]);
+        assert(queue.files.length === 1, "Removal failed");
+        await queue.run("pending", metadata());
+        assert(!queue.addFiles([file("c")]), "Changed selection after start");
+        queue.reset(); assert(!queue.started && queue.files.length === 0, "Reset failed");
+    });
+    await test("Multipart has one file, shared fields, credentials and JSON opt-in", async () => {
+        const outcome = await sendFile(file("sample.png"), metadata(), async (path, options) => {
+            assert(path === "/images" && options.method === "POST" && options.credentials === "same-origin", "Wrong upload route/security");
+            assert(options.headers.Accept === "application/json", "No opt-in");
+            assert(options.body.getAll("file").length === 1, "Multiple files per request");
+            equal(options.body.getAll("characters"), ["2", "3"], "Missing character fields");
+            assert(options.body.get("uploader") === "1", "Missing uploader");
+            return response(201, JSON.stringify({ status: "uploaded", id: "9007199254740993" }));
+        });
+        assert(outcome.id === "9007199254740993" && outcome.state === "uploaded", "Bigint precision lost");
+    });
+    await test("Middleware statuses recognized even with text/HTML", async () => {
+        for (const [status, state, halt] of [[401, "failed", true], [403, "failed", true], [413, "failed", false], [503, "unconfirmed", true], [500, "unconfirmed", true]]) {
+            const outcome = await sendFile(file("a"), metadata(), async () => response(status, "HTML error", "text/html"));
+            assert(outcome.state === state && !!outcome.halt === halt, `Wrong status ${status}`);
+        }
+        const validation = await sendFile(file("a"), metadata(), async () => response(422, JSON.stringify({ status: "failed", message: "Invalid metadata" })));
+        assert(validation.state === "failed" && !validation.halt, "Validation halted batch");
+    });
+    await test("Redirects/HTML/corrupt JSON/invalid IDs are unconfirmed", async () => {
+        const redirect = response(200, "login", "text/html"); Object.defineProperty(redirect, "redirected", { value: true });
+        for (const reply of [redirect, response(200, "login", "text/html"), response(200, "invalid JSON"), response(201, '{"status":"uploaded","id":42}'), response(201, '{"status":"uploaded","id":"../login"}')]) {
+            const outcome = await sendFile(file("a"), metadata(), async () => reply);
+            assert(outcome.state === "unconfirmed" && outcome.halt, "Unexpected response treated as success");
+        }
+    });
+    await test("Bound actual streamed response bytes, including absent Content-Length", async () => {
+        const stream = new ReadableStream({ start(controller) { for (let n = 0; n < 10; n++) controller.enqueue(new Uint8Array(1024)); controller.close(); } });
+        const outcome = await sendFile(file("a"), metadata(), async () => new Response(stream, { status: 200, headers: { "content-type": "application/json" } }));
+        assert(outcome.state === "unconfirmed" && outcome.halt, "Unbounded response");
+    });
+    await test("Live DOM metadata freeze, safe filenames/messages, result links and stop/resume", async () => {
+        const gate = deferred(); let calls = 0;
+        const originalFetch = globalThis.fetch;
+        const malicious = '<img src=x onerror="window.injected=true">';
+        globalThis.fetch = async () => { calls++; if (calls === 1) await gate.promise; return response(calls === 1 ? 422 : 201, JSON.stringify(calls === 1 ? { status: "failed", message: malicious } : { status: "uploaded", id: "9007199254740993" })); };
+        batch.addFiles([file(malicious), file("b")]);
+        document.getElementById("bulk-form").dispatchEvent(new Event("submit", { cancelable: true }));
+        assert(batch.running && document.getElementById("bulk-metadata").disabled, "Metadata not frozen");
+        assert(document.getElementById("bulk-files").disabled && document.getElementById("bulk-start").disabled, "Controls permit double start");
+        document.getElementById("bulk-stop").click();
+        gate.resolve();
+        while (batch.running) await new Promise(resolve => setTimeout(resolve, 0));
+        const rows = document.getElementById("bulk-results");
+        assert(!rows.querySelector("img") && !window.injected && rows.textContent.includes(malicious), "Unsafe DOM content");
+        assert(!document.getElementById("bulk-metadata").disabled && calls === 1, "Did not settle/unfreeze");
+        document.getElementById("bulk-form").dispatchEvent(new Event("submit", { cancelable: true }));
+        while (batch.running) await new Promise(resolve => setTimeout(resolve, 0));
+        assert(calls === 2 && rows.querySelector('a[href="/images/9007199254740993"]'), "Resume/link lost precision");
+        document.getElementById("bulk-retry").click();
+        while (batch.running) await new Promise(resolve => setTimeout(resolve, 0));
+        assert(calls === 3 && batch.files.every(x => x.state === "uploaded"), "UI retry failed");
+        assert(document.getElementById("bulk-summary").textContent.includes("2 uploaded"), "Wrong summary");
+        globalThis.fetch = originalFetch;
+    });
+    document.body.dataset.result = "passed";
+    result.textContent = `${passed} browser checks passed.\n` + result.textContent;
+} catch (error) {
+    document.body.dataset.result = "failed";
+    result.textContent = `FAILED: ${error.message}\n` + result.textContent;
+}
+// Local runner only; this fixture is never served by the Archive.
+await fetch("/test-result", { method: "POST", body: result.textContent });
+</script>

@@ -12,6 +12,12 @@ M3 implemented 2026-10-04. This is an operator runbook, not a claim that the app
 
 Docker is unavailable in the implementation environment. **Container build/runtime, Railway UID/volume/hard-link behavior, HTTPS proxy/domain routing, actual Neon TLS connectivity, provider upload timeouts/limits, and deployment-tier memory have not been verified.** Native Rust/PostgreSQL checks cannot substitute for these checks. No provider accounts, credentials, or deployments were created.
 
+## Bulk-upload operation
+
+Bulk upload is a website-only convenience at `/images/bulk`; [README workflow](README.md#bulk-artwork-upload) and [manual checks](testing.md#bulk-upload-regression-checklist) explain partial success, duplicates, stop/resume, and explicit retry. **No new variables, database migrations, provider resources, ports, volume paths, or registration actions are required.** The existing container copies the small static script at build time. Each request still contains one file with the existing 20 MiB + 64 KiB cap; the page sends requests sequentially. Shared memberships apply to every new image; duplicates are unchanged. Lost responses are unconfirmed, so retry safely rather than assuming a failed save. Keep the page open to retain files; no durable/background batch job is introduced.
+
+The owner should perform the linked browser checklist after deploying normally, including session expiry, maintenance, duplicate behavior, and proxy request limits. This milestone performs no deployment/provider changes and makes no hosted memory/timeout claim. Backup, restoration, orphan grace periods, and ambiguous-commit recovery remain unchanged.
+
 ## Values and provider actions the owner must supply
 
 1. Create Railway/Neon accounts, enable MFA where available, review budget/memory/backup retention, and authorize Railway to access the GitHub repository. Choose nearby regions. Use one service instance; do not enable replicas.

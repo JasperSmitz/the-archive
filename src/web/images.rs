@@ -15,7 +15,7 @@ use axum::{
     body::Body,
     extract::multipart::MultipartRejection,
     extract::{Form, Multipart, Path, Query, State as Extract},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use std::collections::HashMap;
@@ -86,6 +86,14 @@ struct FormPage {
     error: String,
     id: i64,
     values: ImageForm,
+    people: Vec<Record>,
+    characters: Vec<Character>,
+}
+#[derive(Template)]
+#[template(path = "images/bulk.html")]
+struct BulkPage {
+    title: String,
+    error: String,
     people: Vec<Record>,
     characters: Vec<Character>,
 }
@@ -175,6 +183,21 @@ pub async fn detail(
 }
 pub async fn new(Extract(s): Extract<State>) -> Response {
     form(&s, 0, ImageForm::default(), String::new(), StatusCode::OK).await
+}
+pub async fn bulk(Extract(s): Extract<State>) -> Response {
+    let result = async {
+        Ok::<_, Error>(BulkPage {
+            title: "Bulk upload artwork".into(),
+            error: String::new(),
+            people: catalog::list(&s.pool, Kind::People).await?,
+            characters: characters::browse(&s.pool, &Filters::default()).await?,
+        })
+    }
+    .await;
+    match result {
+        Ok(page) => render(page, StatusCode::OK),
+        Err(e) => failure(e),
+    }
 }
 pub async fn edit(Extract(s): Extract<State>, Path(raw_id): Path<String>) -> Response {
     let Some(id) = raw_id.parse::<i64>().ok().filter(|v| *v > 0) else {
@@ -304,6 +327,7 @@ fn multipart_error(e: axum::extract::multipart::MultipartError) -> Error {
 }
 pub async fn upload(
     Extract(s): Extract<State>,
+    headers: HeaderMap,
     multipart: Result<Multipart, MultipartRejection>,
 ) -> Response {
     let mut values = ImageForm::default();
@@ -324,6 +348,36 @@ pub async fn upload(
         .await
     }
     .await;
+    // Explicit opt-in for the sequential browser uploader. Ordinary forms keep
+    // their redirects/rendered errors. Both paths share collection and domain logic.
+    if wants_json(&headers) {
+        return match result {
+            Ok(a) => (
+                if a.duplicate {
+                    StatusCode::OK
+                } else {
+                    StatusCode::CREATED
+                },
+                axum::Json(serde_json::json!({
+                    "status": if a.duplicate { "duplicate" } else { "uploaded" },
+                    // PostgreSQL bigint IDs must not lose precision in JavaScript.
+                    "id": a.id.to_string(),
+                })),
+            )
+                .into_response(),
+            Err(e) => {
+                let (status, message) = error_message(e);
+                (
+                    status,
+                    axum::Json(serde_json::json!({
+                        "status": "failed",
+                        "message": message.chars().take(1000).collect::<String>(),
+                    })),
+                )
+                    .into_response()
+            }
+        };
+    }
     match result {
         Ok(a) => Redirect::to(&format!(
             "/images/{}{}",
@@ -343,6 +397,27 @@ pub async fn upload(
             .await
         }
     }
+}
+fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|value| {
+            value.split(',').any(|item| {
+                let mut parts = item.split(';');
+                parts
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
+                    && parts.all(|parameter| match parameter.trim().split_once('=') {
+                        Some((key, value)) if key.trim().eq_ignore_ascii_case("q") => value
+                            .trim()
+                            .parse::<f32>()
+                            .is_ok_and(|q| q > 0.0 && q <= 1.0),
+                        _ => true,
+                    })
+            })
+        })
 }
 pub async fn confirm(Extract(s): Extract<State>, Path(raw_id): Path<String>) -> Response {
     let Some(id) = raw_id.parse::<i64>().ok().filter(|v| *v > 0) else {

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<p>Archive up to 100 files in this page, one at a time. Static JPEG, PNG, or WebP only: 20 MiB per file, 12,000 pixels per axis, and 40 million decoded pixels.</p>
+<p><strong>Every new image receives all selected characters.</strong> Selecting Link and Venti means every image depicts both. Use separate batches for mixed collections or different artists/sources, or edit individual images afterward. Zero characters leaves artwork uncategorized.</p>
+<p>Each file saves independently. Duplicates keep their existing attribution, metadata, and characters. Navigating away or reloading loses this page’s selection and may interrupt an upload; completed images stay archived. There is no background or cross-reload resume.</p>
+<p><a href="/images/new">Ordinary single-image upload</a> works without JavaScript. <a href="/images">Back to images</a></p>
+<noscript><p class="notice">Bulk uploading needs JavaScript. Please use the ordinary upload form above.</p></noscript>
+{% if people.is_empty() %}
+<p>Create a <a href="/people/new">person</a> before uploading, so the images have uploader attribution.</p>
+{% else %}
+<section id="bulk-controls" hidden aria-label="Bulk uploader">
+<form id="bulk-form">
+<fieldset id="bulk-metadata"><legend>Shared metadata for every new image</legend>
+<label>Uploader attribution<select name="uploader" required><option value="">Choose a person</option>{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select><small>Manually choose who added this artwork. This is attribution, not verified identity.</small></label>
+<label>Shared artist (optional)<input name="artist"><small>Plain text, up to 200 characters; applies to every new image.</small></label>
+<label>Shared source URL (optional)<input name="source_url" type="url"><small>Absolute HTTP/HTTPS URL without credentials, up to 2,048 characters; metadata only, never fetched.</small></label>
+<fieldset><legend>Characters for every new image (optional)</legend>
+{% for c in characters %}<label class="choice"><input type="checkbox" name="characters" value="{{ c.id }}"> {{ c.name }} · {{ c.franchise }}</label>{% else %}<p>No characters yet. Images can be archived without memberships.</p>{% endfor %}
+</fieldset></fieldset>
+<label>Artwork files<input id="bulk-files" type="file" accept="image/jpeg,image/png,image/webp" multiple><small>Add files before starting (100 total maximum). Remove unwanted files below. The server validates each file’s bytes.</small></label>
+<div class="bulk-actions">
+<button id="bulk-start" type="submit">Start / resume pending files</button>
+<button id="bulk-retry" type="button">Retry failed / unconfirmed files</button>
+<button id="bulk-stop" type="button" disabled>Stop after current file</button>
+<button id="bulk-reset" type="button">New batch</button>
+</div>
+</form>
+<p id="bulk-notice" role="status" aria-live="polite">Choose files and shared metadata, then start.</p>
+<p><a href="/login?next=%2Fimages%2Fbulk" target="_blank" rel="noopener">Sign in again in a new tab</a> if your session expires; keep this page open, then explicitly resume or retry.</p>
+<p>Unconfirmed means the response was lost or unreliable: the image may already be archived. Retrying uses exact duplicate detection safely. Retry skips uploaded/duplicate files and uses the shared metadata shown above; duplicates never change memberships.</p>
+<p id="bulk-summary" aria-live="polite">Completed 0 / 0</p>
+<progress id="bulk-progress" value="0" max="1" aria-label="Files with an outcome"></progress>
+<div class="bulk-table"><table><thead><tr><th scope="col">File</th><th scope="col">Size</th><th scope="col">Outcome</th><th scope="col">Record / explanation</th><th scope="col">Selection</th></tr></thead><tbody id="bulk-results"></tbody></table></div>
+</section>
+<script src="/static/bulk-upload.js" type="module"></script>
+{% endif %}
+{% endblock %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 {% if !notice.is_empty() %}<p role="status" class="notice">{{ notice }}</p>{% endif %}
-<p><a href="/images/new">Upload artwork</a></p>
+<p><a href="/images/new">Upload artwork</a> · <a href="/images/bulk">Bulk upload artwork</a></p>
 <form method="get" class="filters">
   <label>Character <select name="character"><option value="">All characters</option>
     {% for c in characters %}<option value="{{ c.id }}" {% if selected == c.id.to_string() %}selected{% endif %}>{{ c.name }} · {{ c.franchise }}</option>{% endfor %}

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% if id == 0 %}<p>Have several files? <a href="/images/bulk">Bulk upload artwork</a> with shared attribution and characters.</p>{% endif %}
 {% if people.is_empty() %}<p>Create a <a href="/people/new">person</a> before uploading, so the image has uploader attribution.</p>{% endif %}
 <form method="post" {% if id == 0 %}enctype="multipart/form-data" action="/images"{% else %}action="/images/{{ id }}/edit"{% endif %}>
 {% if id == 0 %}<label>Image file<input type="file" name="file" accept="image/jpeg,image/png,image/webp" required><small>Static JPEG, PNG, or WebP; up to 20 MiB, 12,000 pixels per axis, and 40 million decoded pixels. Select the file again after any upload error.</small></label>{% endif %}

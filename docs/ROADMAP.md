@@ -24,6 +24,14 @@ Repository foundation: M1 catalog, M2 image archive, M3 private access/deploymen
 
 Keep filling descriptions, associations, images, and source metadata. Broader variants/crossovers, description provenance, better navigation, thumbnails, and remote-use performance may be added when concrete use warrants them. Existing review follow-ups remain in [technical-debt.md](../technical-debt.md); deployment operation remains in [deployment.md](../deployment.md).
 
+### Archive improvement: bulk image upload — implemented locally
+
+The website now provides a multiple-file picker with shared uploader/character selection, sequential bounded uploads, and individual pending/uploading/uploaded/duplicate/failed/unconfirmed results. Each new image receives all selected characters; mixed character collections require separate batches. It retains independent per-image commits and existing validation/storage logic. Duplicates link to existing records without changing their metadata or memberships. Small ordinary browser JavaScript is justified for progress and retry; no batch service, schema, or infrastructure is needed.
+
+Stop/resume and explicit failed/unconfirmed retry retain files only while the page stays open; duplicates never update memberships. No new configuration or provider resources are needed. Hosted/operator bulk-upload acceptance remains unverified; follow the [manual checklist](../testing.md#bulk-upload-regression-checklist).
+
+This addresses repeated manual uploads after saving artwork locally. Downloading from Discord remains separate; explicit Discord archival is still a later Clerk feature. Implementation brief: [BULK_UPLOAD_PROMPT.md](BULK_UPLOAD_PROMPT.md).
+
 ### Tags: retain, de-emphasize
 
 Tags currently have CRUD, character memberships, a main-navigation entry, character-page assignment forms, and a character-list filter. Keep existing records/schema/API behavior intact. They are optional manually curated legacy metadata, not the primary classification workflow or the basis for interpreting either person.

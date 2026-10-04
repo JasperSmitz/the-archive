@@ -62,6 +62,7 @@ Previously, selecting a deleted tag/person/association type returned a generic 4
 
 ## Verification record
 
+- Bulk image upload (2026-10-05): formatting, Clippy, and all 35 tests passed against isolated PostgreSQL 17; the locked native release build passed. Four new integration tests cover negotiated JSON, shared/uncategorized memberships, partial validation failures, duplicates preserving attribution/metadata/memberships, lost-response retry, exact bigint IDs, ordinary HTML upload/edit compatibility, authentication/origin/maintenance, route selection, escaped options, storage failure, and native upload/gallery/edit/restart/content/deletion smoke. Streamed-body regressions now exercise both HTML and JSON negotiation and still verify 413 with no image rows or files. Ten real-script/DOM browser checks passed headlessly in the installed Firefox-compatible Zen browser using fake fetch responses. The installed Brave binary timed out even on an empty headless page, so Chromium was not verified here. Hosted bulk ingestion/proxy behavior remains owner-unverified. No deployment-tier memory measurement or stronger crash-consistency claim is added; TD-002/TD-003/TD-004 remain open as documented.
 - M1 review: formatting, Clippy, and 3 tests passed against isolated PostgreSQL 17.
 - M2 review: formatting, Clippy, and all 10 tests passed against isolated PostgreSQL 17.
 - M3: formatting, Clippy, and 18 tests passed against isolated PostgreSQL 17, including real CLI administration, authenticated HTTP workflows, streamed-upload limits and M2 dump/restore.
